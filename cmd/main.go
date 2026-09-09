@@ -1,25 +1,17 @@
 package main
 
 import (
-	"context"
-	"fmt"
-	"github.com/mymmrac/telego"
-	"os"
+	config2 "MeowSentinelBot/internal/config"
+	"MeowSentinelBot/internal/service"
 )
 
 func main() {
-	botToken := os.Getenv("TELEGRAM_BOT_TOKEN")
 
-	bot, err := telego.NewBot(botToken, telego.WithDefaultDebugLogger())
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
+	config := config2.MustNewConfig("configs/config.json")
+	l := service.NewStdLogger()
 
-	botUser, err := bot.GetMe(context.Background())
-	if err != nil {
-		fmt.Println("Error: ", err)
-	}
+	var bot service.BotService
+	bot = service.NewBotServiceStd(l, &config.Bot)
 
-	fmt.Printf("Bot user: %+v\n", botUser)
+	bot.StartBot()
 }
