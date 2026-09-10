@@ -3,11 +3,10 @@ package utils
 import (
 	"encoding/json"
 	"fmt"
-	"go/types"
-	"io"
-	"log"
 	"os"
 	"strings"
+
+	"github.com/bytedance/gopkg/util/logger"
 )
 
 func ParseJSONFromFile(filepath string, v any) error {
@@ -19,7 +18,7 @@ func ParseJSONFromFile(filepath string, v any) error {
 	defer func(f *os.File) {
 		err := f.Close()
 		if err != nil {
-			return fmt.Errorf("fatal while closing the config file: %w", err)
+			logger.Errorf("error closing file: %v", err)
 		}
 	}(f)
 	err = json.NewDecoder(f).Decode(v)

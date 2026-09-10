@@ -1,9 +1,9 @@
 package config
 
 import (
-	"encoding/json"
+	"MeowSentinelBot/internal/utils"
+	"fmt"
 	"log"
-	"os"
 )
 
 type Config struct {
@@ -11,23 +11,10 @@ type Config struct {
 }
 
 func MustNewConfig(filePath string) *Config {
-	f, err := os.Open(filePath)
-	if err != nil {
-		log.Fatal("Fatal while opening the config file: ", err)
-	}
-
-	defer func(f *os.File) {
-		err := f.Close()
-		if err != nil {
-			log.Fatal("Fatal while closing the config file: ", err)
-		}
-	}(f)
 	var cfg Config
-	err = json.NewDecoder(f).Decode(&cfg)
-	if err != nil {
-		log.Fatal("Fatal while parsing the config file: ", err)
+	if err := utils.ParseJSONFromFile(filePath, &cfg); err != nil {
+		log.Fatal(fmt.Errorf("fatal error while parsing config file %s: %w", filePath, err))
 	}
-
 	return &cfg
 }
 

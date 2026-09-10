@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"time"
 
@@ -16,24 +17,30 @@ import (
 type Storage interface {
 	initTables(context.Context) error
 	AddUser(ctx context.Context, user model.User) error
+	GetUser(ctx context.Context, username string) (model.TelegramUser, error)
 	CreateStack(ctx context.Context, user model.User) error
 	AddRecord(ctx context.Context, user model.User) error
-	UpdateRecord(ctx context.Context, user model.User) error
-	GetStack(ctx context.Context, user model.User) (string, error)
-	GetRecord(ctx context.Context, user model.User) (string, error)
+	UpdateRecordTitle(ctx context.Context, user model.User, recId int) error
+	UpdateRecordType(ctx context.Context, user model.User, recId int) error
+	UpdateRecordStatus(ctx context.Context, user model.User, recId int) error
+	GetUserStackIDs(ctx context.Context, user model.User) (string, error)
+	GetOwnedStacks(ctx context.Context, user model.User) ([]model.Stack, error)
+	GetStack(ctx context.Context, user model.User, stackID int64) (*model.Stack, error)
+	GetStackRecords(ctx context.Context, user model.User, stackID int64) ([]model.Entry, error)
 	UpdateRecent(ctx context.Context, user model.User) error
+	UpdateUserStacks(ctx context.Context, user model.User) error
 	Close()
 }
 
 var queryInitSchema = []string{ // TODO rewrite user_id to owner_id
 	`CREATE TABLE IF NOT EXISTS stacks (
     					id INTEGER PRIMARY KEY AUTOINCREMENT
-    					,user_id INTEGER NOT NULL
+    					,owner_id INTEGER NOT NULL
     					,title TEXT NOT NULL
     					,created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                         ,updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-                    	,FOREIGN KEY (user_id) REFERENCES users(telegram_id) ON DELETE CASCADE
-		);`,
+                    	,FOREIGN KEY (owner_id) REFERENCES users(telegram_id) ON DELETE CASCADE
+	);`,
 	`CREATE TABLE IF NOT EXISTS media_records (
 		  				id INTEGER PRIMARY KEY AUTOINCREMENT
 		  				,stack_id INTEGER NULL
@@ -43,28 +50,45 @@ var queryInitSchema = []string{ // TODO rewrite user_id to owner_id
 		  				,created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		  				,updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		  				,FOREIGN KEY (stack_id) REFERENCES stacks (id) ON DELETE CASCADE  
-		);`,
+	);`,
 	`CREATE TABLE IF NOT EXISTS users (
 		                telegram_id INTEGER PRIMARY KEY 
-		    			,stack_ids TEXT NOT NULL DEFAULT '{}'
 		            	,recent_media TEXT NOT NULL DEFAULT '{}'
                         ,created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		  				,updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-		);`,
+	);`,
+	`CREATE TABLE IF NOT EXISTS user_stacks (
+    					id INTEGER PRIMARY KEY AUTOINCREMENT
+                    	,user_id INTEGER NOT NULL
+                        ,stack_id INTEGER NOT NULL
+                        ,FOREIGN KEY (user_id) REFERENCES users (telegram_id) ON DELETE CASCADE
+                    	,FOREIGN KEY (stack_id) REFERENCES stacks (id) ON DELETE CASCADE
+	);`,
 }
 
 const (
 	// ================ DDL ================
 	// ================ DML ================
-	queryGetStack = `
+
+	queryGetStackRecords = `
 		SELECT * FROM media_records
 					WHERE stack_id=?`
+	queryGetStack = `
+		SELECT * FROM stacks
+					WHERE id=?`
 	queryGetOwnedStacks = `
 		SELECT id, title FROM stacks
 					WHERE user_id=?`
 	queryGetUserStacks = `
-		SELECT stack_ids FROM users
-					WHERE telegram_id=?`
+		SELECT 
+		    id
+		    ,user_id
+		    ,title
+		    ,created_at
+		    ,updated_at 
+		FROM stacks s
+		JOIN user_stacks us ON us.user_id=s.id
+		WHERE us.user_id=?`
 	queryAddUser = `
 		INSERT INTO users(telegram_id, stack_ids)
 					VALUES(?,?)
@@ -79,10 +103,18 @@ const (
 		UPDATE users
 					SET stack_ids = ?
 					WHERE telegram_id=?`
-	queryUpdateRecord = `
+	queryUpdateRecordTitle = `
 		UPDATE media_records
-					SET title=?, type=?, status=?
-					WHERE stack_id=? AND title=?`
+					SET title=?
+					WHERE id=?`
+	queryUpdateRecordType = `
+		UPDATE media_records
+					SET type=?
+					WHERE id=?`
+	queryUpdateRecordStatus = `
+		UPDATE media_records
+					SET status=?
+					WHERE id=?`
 	queryUpdateRecent = `
 		UPDATE users
 					SET recent_media = ?
@@ -153,7 +185,6 @@ func checkIfExists(path string) (bool, error) {
 	}
 	return false, err
 }
-
 func verifyDBIntegrity(ctx context.Context, db *sql.DB) error {
 	var res string
 	row := db.QueryRowContext(
@@ -180,40 +211,123 @@ func (s *SqliteStorage) initTables(ctx context.Context) error {
 }
 
 func (s *SqliteStorage) AddUser(ctx context.Context, user model.User) (err error) {
-	_, err = s.db.ExecContext(ctx, queryAddUser, user.GetTelegramID())
+	_, err = s.db.ExecContext(
+		ctx,
+		queryAddUser,
+		user.GetTelegramID(),
+	)
 	return
 }
+func (s *SqliteStorage) GetUser(ctx context.Context, username string) (user model.TelegramUser, err error) {
 
+}
 func (s *SqliteStorage) CreateStack(ctx context.Context, user model.User) (err error) {
-	_, err = s.db.ExecContext(ctx, queryCreateStack, user.GetTelegramID(), user.GetData())
+	_, err = s.db.ExecContext(
+		ctx,
+		queryCreateStack,
+		user.GetTelegramID(),
+		user.GetData(),
+	)
 	return
 }
-
 func (s *SqliteStorage) AddRecord(ctx context.Context, user model.User) error {
 	foo, err := user.GetDataForNewRecord()
-	_, err = s.db.ExecContext(ctx, queryAddRecord, user.GetData(), user.GetTelegramID())
+	if err != nil {
+		return fmt.Errorf("error while getting user data for new record: %w", err)
+	}
+	_, err = s.db.ExecContext(
+		ctx,
+		queryAddRecord,
+		foo.StackID,
+		foo.RecTitle,
+		foo.RecType,
+		foo.RecStatus,
+	)
+	return err
 }
-
-func (s *SqliteStorage) UpdateRecord(ctx context.Context, user model.User) error {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (s *SqliteStorage) GetStack(ctx context.Context, user model.User) (string, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (s *SqliteStorage) GetRecord(ctx context.Context, user model.User) (string, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (s *SqliteStorage) UpdateRecent(ctx context.Context, user model.User) (err error) {
-	_, err = s.db.ExecContext(ctx, queryUpdateRecord, user.GetData(), user.GetTelegramID())
+func (s *SqliteStorage) UpdateRecordTitle(ctx context.Context, user model.User, recId int) (err error) {
+	_, err = s.db.ExecContext(ctx, queryUpdateRecordTitle, user.GetData(), recId)
 	return
 }
+func (s *SqliteStorage) UpdateRecordType(ctx context.Context, user model.User, recId int) (err error) {
+	_, err = s.db.ExecContext(ctx, queryUpdateRecordType, user.GetData(), recId)
+	return
+}
+func (s *SqliteStorage) UpdateRecordStatus(ctx context.Context, user model.User, recId int) (err error) {
+	_, err = s.db.ExecContext(ctx, queryUpdateRecordStatus, user.GetData(), recId)
+	return
+}
+func (s *SqliteStorage) GetUserStackIDs(ctx context.Context, username string) (stacks []int, err error) {
 
+}
+func (s *SqliteStorage) GetOwnedStacks(ctx context.Context, username string) (stacks []model.Stack, err error) {
+
+}
+func (s *SqliteStorage) GetStack(ctx context.Context, stackID int64) (*model.Stack, error) {
+	var foo model.Stack
+	err := s.db.QueryRowContext(
+		ctx,
+		queryGetStack,
+		stackID,
+	).Scan(
+		&foo.ID,
+		&foo.OwnerId,
+		&foo.Title,
+		&foo.Created,
+		&foo.Updated,
+	)
+
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &foo, nil
+}
+func (s *SqliteStorage) GetStackRecords(ctx context.Context, stackID int64) ([]model.Entry, error) {
+	rows, err := s.db.QueryContext(ctx, queryGetStackRecords, stackID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer func(rows *sql.Rows) {
+		err := rows.Close()
+		if err != nil {
+			log.Printf("GetStackRows error while extracting: %v", err)
+		}
+	}(rows)
+
+	var entries []model.Entry
+	for rows.Next() {
+		var e model.Entry
+		if err := rows.Scan(
+			&e.Id,
+			&e.StackId,
+			&e.Title,
+			&e.Type,
+			&e.Status,
+			&e.Created,
+			&e.Updated,
+		); err != nil {
+			return nil, err
+		}
+		entries = append(entries, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return entries, nil
+}
+func (s *SqliteStorage) UpdateRecent(ctx context.Context, user model.User) (err error) {
+	_, err = s.db.ExecContext(ctx, queryUpdateRecent, user.GetData(), user.GetTelegramID())
+	return
+}
+func (s *SqliteStorage) UpdateUserStacks(ctx context.Context, user model.User) error {
+
+}
 func (s *SqliteStorage) Close() {
 	_ = s.db.Close()
 }
