@@ -1,3 +1,5 @@
 .env
 .idea
 
+bot.db*
+identifier.sqlite
