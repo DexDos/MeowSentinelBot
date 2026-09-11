@@ -23,16 +23,16 @@ type Storage interface {
 	UpdateRecordTitle(ctx context.Context, user model.User, recId int) error
 	UpdateRecordType(ctx context.Context, user model.User, recId int) error
 	UpdateRecordStatus(ctx context.Context, user model.User, recId int) error
-	GetUserStackIDs(ctx context.Context, user model.User) (string, error)
+	GetUserStackIDs(ctx context.Context, user model.User) ([]int, error)
 	GetOwnedStacks(ctx context.Context, user model.User) ([]model.Stack, error)
-	GetStack(ctx context.Context, user model.User, stackID int64) (*model.Stack, error)
-	GetStackRecords(ctx context.Context, user model.User, stackID int64) ([]model.Entry, error)
+	GetStack(ctx context.Context, stackID int64) (*model.Stack, error)
+	GetStackRecords(ctx context.Context, stackID int64) ([]model.Entry, error)
 	UpdateRecent(ctx context.Context, user model.User) error
 	UpdateUserStacks(ctx context.Context, user model.User) error
 	Close()
 }
 
-var queryInitSchema = []string{ // TODO rewrite user_id to owner_id
+var queryInitSchema = []string{
 	`CREATE TABLE IF NOT EXISTS stacks (
     					id INTEGER PRIMARY KEY AUTOINCREMENT
     					,owner_id INTEGER NOT NULL
@@ -41,16 +41,25 @@ var queryInitSchema = []string{ // TODO rewrite user_id to owner_id
                         ,updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                     	,FOREIGN KEY (owner_id) REFERENCES users(telegram_id) ON DELETE CASCADE
 	);`,
-	`CREATE TABLE IF NOT EXISTS media_records (
+	`CREATE TABLE IF NOT EXISTS entries (
 		  				id INTEGER PRIMARY KEY AUTOINCREMENT
 		  				,stack_id INTEGER NULL
 		  				,title TEXT NOT NULL
 		  				,type TEXT NOT NULL
-		  				,status TEXT NOT NULL DEFAULT '{}'
+		  				,current_season INTEGER NOT NULL
+                        ,current_episode INTEGER NOT NULL
 		  				,created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		  				,updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		  				,FOREIGN KEY (stack_id) REFERENCES stacks (id) ON DELETE CASCADE  
 	);`,
+	`CREATE TABLE IF NOT EXISTS entry_ratings (
+    					id INTEGER PRIMARY KEY AUTOINCREMENT
+                    	,user_id INTEGER NOT NULL
+                        ,entry_id INTEGER NOT NULL
+                        ,rating INTEGER DEFAULT 0
+                        ,FOREIGN KEY (user_id) REFERENCES users (telegram_id) ON DELETE CASCADE
+                        ,FOREIGN KEY (entry_id) REFERENCES entries (id) ON DELETE CASCADE
+	)`,
 	`CREATE TABLE IF NOT EXISTS users (
 		                telegram_id INTEGER PRIMARY KEY 
 		            	,recent_media TEXT NOT NULL DEFAULT '{}'
@@ -71,54 +80,73 @@ const (
 	// ================ DML ================
 
 	queryGetStackRecords = `
-		SELECT * FROM media_records
+		SELECT * FROM entries --TODO UPDATE *
 					WHERE stack_id=?`
-	queryGetStack = `
-		SELECT * FROM stacks
-					WHERE id=?`
-	queryGetOwnedStacks = `
-		SELECT id, title FROM stacks
-					WHERE user_id=?`
-	queryGetUserStacks = `
+	queryGetStackById = `
 		SELECT 
 		    id
-		    ,user_id
+		    ,owner_id
+		    ,title
+			,created_at
+			,updated_at
+		FROM stacks --TODO UPDATE *
+					WHERE id=?`
+	queryGetOwnedStacks = `
+		SELECT 
+		    id
+		    ,owner_id
+		    ,title
+			,created_at
+			,updated_at
+		FROM stacks
+		WHERE owner_id=?`
+	queryGetUserStacks = `
+		SELECT 
+		    s.id
+		    ,owner_id
 		    ,title
 		    ,created_at
 		    ,updated_at 
 		FROM stacks s
-		JOIN user_stacks us ON us.user_id=s.id
+		JOIN user_stacks us ON us.stack_id=s.id
 		WHERE us.user_id=?`
 	queryAddUser = `
-		INSERT INTO users(telegram_id, stack_ids)
-					VALUES(?,?)
+		INSERT INTO users(telegram_id)
+					VALUES(?)
 					ON CONFLICT(telegram_id) DO NOTHING;`
 	queryCreateStack = `
-		INSERT INTO stacks(user_id, title)
-					VALUES(?,?)`
+		INSERT INTO stacks(owner_id, title)
+		VALUES(?,?)`
 	queryAddRecord = `
-		INSERT INTO media_records(stack_id, title, type, status)
-					VALUES(?,?,?,?)`
-	queryUpdateUserStacks = `
-		UPDATE users
-					SET stack_ids = ?
-					WHERE telegram_id=?`
+		INSERT INTO entries(
+		                    stack_id, 
+		                    title, 
+		                    type, 
+		                    current_season, 
+		                    current_episode)
+		VALUES(?,?,?,?,?)`
+	queryAddToUserStacks = `
+		INSERT INTO user_stacks(user_id, stack_id)
+		VALUES (?,?)`
+	queryDeleteFromUserStacks = `
+		DELETE FROM user_stacks
+		WHERE user_id=? AND stack_id=?`
 	queryUpdateRecordTitle = `
-		UPDATE media_records
-					SET title=?
-					WHERE id=?`
+		UPDATE entries
+		SET title=?
+		WHERE id=?`
 	queryUpdateRecordType = `
-		UPDATE media_records
-					SET type=?
-					WHERE id=?`
+		UPDATE entries
+		SET type=?
+		WHERE id=?`
 	queryUpdateRecordStatus = `
-		UPDATE media_records
-					SET status=?
-					WHERE id=?`
+		UPDATE entries
+		SET current_season=?, current_episode=?
+		WHERE id=?`
 	queryUpdateRecent = `
 		UPDATE users
-					SET recent_media = ?
-					WHERE telegram_id = ?`
+		SET recent_media = ?
+		WHERE telegram_id = ?`
 )
 
 type SqliteStorage struct {
@@ -219,7 +247,7 @@ func (s *SqliteStorage) AddUser(ctx context.Context, user model.User) (err error
 	return
 }
 func (s *SqliteStorage) GetUser(ctx context.Context, username string) (user model.TelegramUser, err error) {
-
+	panic("unimplemented")
 }
 func (s *SqliteStorage) CreateStack(ctx context.Context, user model.User) (err error) {
 	_, err = s.db.ExecContext(
@@ -241,7 +269,7 @@ func (s *SqliteStorage) AddRecord(ctx context.Context, user model.User) error {
 		foo.StackID,
 		foo.RecTitle,
 		foo.RecType,
-		foo.RecStatus,
+		foo.RecStatus, //TODO update status
 	)
 	return err
 }
@@ -255,19 +283,19 @@ func (s *SqliteStorage) UpdateRecordType(ctx context.Context, user model.User, r
 }
 func (s *SqliteStorage) UpdateRecordStatus(ctx context.Context, user model.User, recId int) (err error) {
 	_, err = s.db.ExecContext(ctx, queryUpdateRecordStatus, user.GetData(), recId)
-	return
+	return // TODO UPDATE STATUS
 }
-func (s *SqliteStorage) GetUserStackIDs(ctx context.Context, username string) (stacks []int, err error) {
-
+func (s *SqliteStorage) GetUserStackIDs(ctx context.Context, user model.User) (stacks []int, err error) {
+	panic("unimplemented")
 }
-func (s *SqliteStorage) GetOwnedStacks(ctx context.Context, username string) (stacks []model.Stack, err error) {
-
+func (s *SqliteStorage) GetOwnedStacks(ctx context.Context, user model.User) (stacks []model.Stack, err error) {
+	panic("unimplemented")
 }
 func (s *SqliteStorage) GetStack(ctx context.Context, stackID int64) (*model.Stack, error) {
 	var foo model.Stack
 	err := s.db.QueryRowContext(
 		ctx,
-		queryGetStack,
+		queryGetStackById,
 		stackID,
 	).Scan(
 		&foo.ID,
@@ -326,7 +354,7 @@ func (s *SqliteStorage) UpdateRecent(ctx context.Context, user model.User) (err 
 	return
 }
 func (s *SqliteStorage) UpdateUserStacks(ctx context.Context, user model.User) error {
-
+	panic("unimplemented")
 }
 func (s *SqliteStorage) Close() {
 	_ = s.db.Close()

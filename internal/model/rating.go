@@ -3,7 +3,8 @@ package model
 type Score int
 
 const (
-	Nasty Score = iota
+	NotSeen Score = iota
+	Nasty
 	Bad
 	Ick
 	WorthMeowing

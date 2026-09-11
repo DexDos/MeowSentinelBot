@@ -3,30 +3,24 @@ package service
 import (
 	"MeowSentinelBot/internal/config"
 	"MeowSentinelBot/internal/db"
-	"context"
-	"errors"
+	"MeowSentinelBot/internal/utils"
 	"fmt"
-	"os"
 
-	"github.com/joho/godotenv"
 	"github.com/mymmrac/telego"
 )
 
 type BotService interface {
-	StartBot()
+	GetTelegramBot() *telego.Bot
 }
 
 type BotServiceStd struct {
-	bot    *telego.Bot
+	Bot    *telego.Bot
 	db     db.Storage
 	logger Logger
 }
 
-func (s *BotServiceStd) StartBot() {
-	updates, _ := s.bot.UpdatesViaLongPolling(context.Background(), nil)
-	for update := range updates {
-		fmt.Printf("Update: %+v\n", update)
-	}
+func (s *BotServiceStd) GetTelegramBot() *telego.Bot {
+	return s.Bot
 }
 
 func NewBotServiceStd(logger Logger, cfg *config.Bot) *BotServiceStd {
@@ -39,7 +33,7 @@ func NewBotServiceStd(logger Logger, cfg *config.Bot) *BotServiceStd {
 		)
 	}
 
-	token, err := getEnv(cfg.Telegram.EnvVar)
+	token, err := utils.GetEnv(cfg.Telegram.EnvVar)
 	if err != nil {
 		logger.panicHandle(fmt.Errorf("error getting telegram token: %w", err))
 	}
@@ -51,18 +45,6 @@ func NewBotServiceStd(logger Logger, cfg *config.Bot) *BotServiceStd {
 	return &BotServiceStd{
 		logger: logger,
 		db:     dbService,
-		bot:    bot,
+		Bot:    bot,
 	}
-}
-
-func getEnv(envVar string) (string, error) {
-	if err := godotenv.Load(".env"); err != nil {
-		return "", fmt.Errorf("error loading .env file: %w", err)
-	}
-
-	token := os.Getenv(envVar)
-	if token == "" {
-		return "", errors.New("no telegram bot token provided")
-	}
-	return token, nil
 }

@@ -13,5 +13,9 @@ func main() {
 	var bot service.BotService
 	bot = service.NewBotServiceStd(l, &config.Bot)
 
-	bot.StartBot()
+	var handler service.Responder
+	handler = service.NewAPIBotHandler(l, bot)
+
+	handler.StartBot()
+
 }
