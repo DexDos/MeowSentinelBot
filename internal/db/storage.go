@@ -16,19 +16,22 @@ import (
 
 type Storage interface {
 	initTables(context.Context) error
-	AddUser(ctx context.Context, user model.User) error
-	GetUser(ctx context.Context, username string) (model.TelegramUser, error)
-	CreateStack(ctx context.Context, user model.User) error
-	AddRecord(ctx context.Context, user model.User) error
-	UpdateRecordTitle(ctx context.Context, user model.User, recId int) error
-	UpdateRecordType(ctx context.Context, user model.User, recId int) error
-	UpdateRecordStatus(ctx context.Context, user model.User, recId int) error
-	GetUserStackIDs(ctx context.Context, user model.User) ([]int, error)
-	GetOwnedStacks(ctx context.Context, user model.User) ([]model.Stack, error)
-	GetStack(ctx context.Context, stackID int64) (*model.Stack, error)
-	GetStackRecords(ctx context.Context, stackID int64) ([]model.Entry, error)
-	UpdateRecent(ctx context.Context, user model.User) error
-	UpdateUserStacks(ctx context.Context, user model.User) error
+	AddUser(context.Context, model.User) error
+	GetUser(context.Context, string) (model.TelegramUser, error)
+	CreateStack(context.Context, model.User) (int64, error)
+	AddStackToUser(context.Context, *model.TelegramUser) error
+	SetCurrentStack(ctx context.Context, user *model.TelegramUser) (err error)
+	AddRecord(context.Context, model.User) error
+	UpdateRecordTitle(context.Context, model.User, int) error
+	UpdateRecordType(context.Context, model.User, int) error
+	UpdateRecordStatus(context.Context, model.User, int) error
+	GetUserStackIDs(context.Context, model.User) ([]int64, error)
+	GetOwnedStacks(context.Context, model.User) ([]int64, error)
+	GetStack(context.Context, int64) (*model.Stack, error)
+	GetStackRecords(context.Context, int64) ([]model.Entry, error)
+	UpdateRecent(context.Context, model.User) error
+	Transaction(func() error) error
+	GetTransaction() (*sql.Tx, error)
 	Close()
 }
 
@@ -73,6 +76,12 @@ var queryInitSchema = []string{
                         ,FOREIGN KEY (user_id) REFERENCES users (telegram_id) ON DELETE CASCADE
                     	,FOREIGN KEY (stack_id) REFERENCES stacks (id) ON DELETE CASCADE
 	);`,
+	`CREATE TABLE IF NOT EXISTS selected_user_stacks (
+    					user_id INTEGER PRIMARY KEY
+                        ,stack_id INTEGER NOT NULL
+                        ,FOREIGN KEY (user_id) REFERENCES users (telegram_id) ON DELETE CASCADE
+                    	,FOREIGN KEY (stack_id) REFERENCES stacks (id) ON DELETE CASCADE
+	);`,
 }
 
 const (
@@ -89,7 +98,7 @@ const (
 		    ,title
 			,created_at
 			,updated_at
-		FROM stacks --TODO UPDATE *
+		FROM stacks 
 					WHERE id=?`
 	queryGetOwnedStacks = `
 		SELECT 
@@ -125,9 +134,14 @@ const (
 		                    current_season, 
 		                    current_episode)
 		VALUES(?,?,?,?,?)`
-	queryAddToUserStacks = `
+	queryAddStackToUser = `
 		INSERT INTO user_stacks(user_id, stack_id)
 		VALUES (?,?)`
+	queryUpdateUserCurrentStack = `
+		INSERT INTO selected_user_stacks(user_id, stack_id)
+		VALUES (?,?) 
+		ON CONFLICT (user_id) 
+		DO UPDATE SET stack_id=EXCLUDED.stack_id;`
 	queryDeleteFromUserStacks = `
 		DELETE FROM user_stacks
 		WHERE user_id=? AND stack_id=?`
@@ -249,12 +263,33 @@ func (s *SqliteStorage) AddUser(ctx context.Context, user model.User) (err error
 func (s *SqliteStorage) GetUser(ctx context.Context, username string) (user model.TelegramUser, err error) {
 	panic("unimplemented")
 }
-func (s *SqliteStorage) CreateStack(ctx context.Context, user model.User) (err error) {
-	_, err = s.db.ExecContext(
+func (s *SqliteStorage) CreateStack(ctx context.Context, user model.User) (id int64, err error) {
+	res, err := s.db.ExecContext(
 		ctx,
 		queryCreateStack,
 		user.GetTelegramID(),
-		user.GetData(),
+		user.GetPayload(),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("create stack error: %w", err)
+	}
+	return res.LastInsertId()
+}
+func (s *SqliteStorage) AddStackToUser(ctx context.Context, user *model.TelegramUser) (err error) {
+	_, err = s.db.ExecContext(
+		ctx,
+		queryAddStackToUser,
+		user.GetTelegramID(),
+		user.GetCurrentStackID(),
+	)
+	return
+}
+func (s *SqliteStorage) SetCurrentStack(ctx context.Context, user *model.TelegramUser) (err error) {
+	_, err = s.db.ExecContext(
+		ctx,
+		queryUpdateUserCurrentStack,
+		user.User.ID,
+		user.UserData.CurrentStackID,
 	)
 	return
 }
@@ -274,21 +309,21 @@ func (s *SqliteStorage) AddRecord(ctx context.Context, user model.User) error {
 	return err
 }
 func (s *SqliteStorage) UpdateRecordTitle(ctx context.Context, user model.User, recId int) (err error) {
-	_, err = s.db.ExecContext(ctx, queryUpdateRecordTitle, user.GetData(), recId)
+	_, err = s.db.ExecContext(ctx, queryUpdateRecordTitle, user.GetPayload(), recId)
 	return
 }
 func (s *SqliteStorage) UpdateRecordType(ctx context.Context, user model.User, recId int) (err error) {
-	_, err = s.db.ExecContext(ctx, queryUpdateRecordType, user.GetData(), recId)
+	_, err = s.db.ExecContext(ctx, queryUpdateRecordType, user.GetPayload(), recId)
 	return
 }
 func (s *SqliteStorage) UpdateRecordStatus(ctx context.Context, user model.User, recId int) (err error) {
-	_, err = s.db.ExecContext(ctx, queryUpdateRecordStatus, user.GetData(), recId)
+	_, err = s.db.ExecContext(ctx, queryUpdateRecordStatus, user.GetPayload(), recId)
 	return // TODO UPDATE STATUS
 }
-func (s *SqliteStorage) GetUserStackIDs(ctx context.Context, user model.User) (stacks []int, err error) {
+func (s *SqliteStorage) GetUserStackIDs(ctx context.Context, user model.User) (stacks []int64, err error) {
 	panic("unimplemented")
 }
-func (s *SqliteStorage) GetOwnedStacks(ctx context.Context, user model.User) (stacks []model.Stack, err error) {
+func (s *SqliteStorage) GetOwnedStacks(ctx context.Context, user model.User) (stacks []int64, err error) {
 	panic("unimplemented")
 }
 func (s *SqliteStorage) GetStack(ctx context.Context, stackID int64) (*model.Stack, error) {
@@ -350,11 +385,27 @@ func (s *SqliteStorage) GetStackRecords(ctx context.Context, stackID int64) ([]m
 	return entries, nil
 }
 func (s *SqliteStorage) UpdateRecent(ctx context.Context, user model.User) (err error) {
-	_, err = s.db.ExecContext(ctx, queryUpdateRecent, user.GetData(), user.GetTelegramID())
+	_, err = s.db.ExecContext(ctx, queryUpdateRecent, user.GetPayload(), user.GetTelegramID())
 	return
 }
-func (s *SqliteStorage) UpdateUserStacks(ctx context.Context, user model.User) error {
-	panic("unimplemented")
+
+func (s *SqliteStorage) Transaction(fn func() error) (err error) {
+	tx, err := s.db.Begin()
+
+	defer func() {
+		if err != nil {
+			err = tx.Rollback()
+		}
+	}()
+
+	err = fn()
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+func (s *SqliteStorage) GetTransaction() (*sql.Tx, error) {
+	return s.db.Begin()
 }
 func (s *SqliteStorage) Close() {
 	_ = s.db.Close()

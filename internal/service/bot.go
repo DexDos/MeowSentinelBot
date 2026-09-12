@@ -3,7 +3,9 @@ package service
 import (
 	"MeowSentinelBot/internal/config"
 	"MeowSentinelBot/internal/db"
+	"MeowSentinelBot/internal/model"
 	"MeowSentinelBot/internal/utils"
+	"context"
 	"fmt"
 
 	"github.com/mymmrac/telego"
@@ -11,6 +13,11 @@ import (
 
 type BotService interface {
 	GetTelegramBot() *telego.Bot
+	CreateNewUserStack(context.Context, *telego.User, string) error
+	JoinUserStack(context.Context, *telego.User, int64) error
+	GetOwnedStacks(context.Context, *telego.User) ([]model.Stack, error)
+	GetUserStacks(context.Context, *telego.User) ([]model.Stack, error)
+	SelectUserStack(context.Context, *telego.User, int64) error
 }
 
 type BotServiceStd struct {
@@ -19,8 +26,71 @@ type BotServiceStd struct {
 	logger Logger
 }
 
+func (s *BotServiceStd) CreateNewUserStack(ctx context.Context, tUser *telego.User, title string) error {
+	return s.db.Transaction(func() error {
+		u := model.NewTelegramUser(tUser, title)
+
+		stackID, err := s.db.CreateStack(ctx, u)
+		if err != nil {
+			return err
+		}
+
+		u.SetCurrentStackID(stackID)
+		err = s.db.AddStackToUser(ctx, u)
+		if err != nil {
+			return err
+		}
+
+		err = s.db.SetCurrentStack(ctx, u)
+		return err
+	})
+}
+func (s *BotServiceStd) JoinUserStack(ctx context.Context, tUser *telego.User, stackID int64) error {
+	u := model.NewTelegramUser(tUser, "")
+	u.SetCurrentStackID(stackID)
+	err := s.db.AddStackToUser(ctx, u)
+	if err != nil {
+		return err
+	}
+
+	err = s.db.SetCurrentStack(ctx, u)
+	return err
+}
+
+func (s *BotServiceStd) GetOwnedStacks(ctx context.Context, tUser *telego.User) ([]model.Stack, error) {
+	panic("implement me")
+}
+func (s *BotServiceStd) GetUserStacks(ctx context.Context, tUser *telego.User) ([]model.Stack, error) {
+	user := model.NewTelegramUser(tUser, "")
+	stacks, err := s.db.GetUserStackIDs(ctx, user)
+	if err != nil {
+		return nil, err
+	}
+	if len(stacks) == 0 {
+		return nil, nil
+	}
+	var result []model.Stack
+	for stack := range stacks {
+		r, err := s.db.GetStack(ctx, stacks[stack])
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, *r)
+	}
+
+	return result, nil
+
+}
+
 func (s *BotServiceStd) GetTelegramBot() *telego.Bot {
 	return s.Bot
+}
+
+// SelectUserStack pins selected stack for user, so that they access it quickly
+func (s *BotServiceStd) SelectUserStack(ctx context.Context, tUser *telego.User, stackID int64) error {
+	u := model.NewTelegramUser(tUser, "")
+	u.SetCurrentStackID(stackID)
+	return s.db.SetCurrentStack(ctx, u)
 }
 
 func NewBotServiceStd(logger Logger, cfg *config.Bot) *BotServiceStd {

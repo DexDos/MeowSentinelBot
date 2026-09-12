@@ -13,9 +13,12 @@ func main() {
 	var bot service.BotService
 	bot = service.NewBotServiceStd(l, &config.Bot)
 
-	var handler service.Responder
+	var handler service.APIHandler
 	handler = service.NewAPIBotHandler(l, bot)
 
-	handler.StartBot()
+	var responder service.Responder
+	responder = service.NewStdResponder()
+
+	handler.StartBot(&responder)
 
 }

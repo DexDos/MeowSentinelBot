@@ -8,7 +8,7 @@ import (
 )
 
 type User interface {
-	GetData() string
+	GetPayload() string
 	GetCurrentStackID() int64
 	SetCurrentStackID(int64)
 	GetDataForNewRecord() (DataForNewStack, error)
@@ -31,49 +31,56 @@ type UserData struct {
 }
 
 type TelegramUser struct {
-	user     telego.User
-	userData UserData
+	User     *telego.User
+	UserData UserData
 }
 
 func (u *TelegramUser) GetCurrentStackID() int64 {
-	return u.userData.CurrentStackID
+	return u.UserData.CurrentStackID
 }
 
 func (u *TelegramUser) SetCurrentStackID(newID int64) {
-	u.userData.CurrentStackID = newID
+	u.UserData.CurrentStackID = newID
 }
 
-func NewTelegramUser(user telego.User, p string) *TelegramUser {
+func NewTelegramUser(user *telego.User, p string) *TelegramUser {
 	return &TelegramUser{
-		user: user,
-		userData: UserData{
+		User: user,
+		UserData: UserData{
 			Payload: p,
 		},
 	}
 }
 
-func (u *TelegramUser) GetData() string {
-	if u.userData.Payload != "" {
-		return u.userData.Payload
+func (u *TelegramUser) GetPayload() string {
+	if u.UserData.Payload != "" {
+		return u.UserData.Payload
 	}
 	return "null"
 }
+func (u *TelegramUser) SetPayload(p string) error {
+	if p == "" {
+		return errors.New("payload is empty")
+	}
+	u.UserData.Payload = p
+	return nil
+}
 
 func (u *TelegramUser) GetDataForNewRecord() (DataForNewStack, error) {
-	if u.userData.Payload == "" {
+	if u.UserData.Payload == "" {
 		return DataForNewStack{}, errors.New("user's payload is empty")
 	}
 	var data DataForNewStack
-	data.StackID = u.userData.CurrentStackID
+	data.StackID = u.UserData.CurrentStackID
 
-	err := utils.ParseJSONFromString(u.userData.Payload, &data)
+	err := utils.ParseJSONFromString(u.UserData.Payload, &data)
 	return data, err
 }
 
 func (u *TelegramUser) GetTelegramID() int64 {
-	return u.user.ID
+	return u.User.ID
 }
 
 func (u *TelegramUser) GetTelegramUsername() string {
-	return u.user.Username
+	return u.User.Username
 }
