@@ -17,7 +17,7 @@ import (
 type Storage interface {
 	initTables(context.Context) error
 	AddUser(context.Context, model.User) error
-	GetUser(context.Context, string) (model.TelegramUser, error)
+	GetUser(context.Context, int64) (model.TelegramUser, error)
 	CreateStack(context.Context, model.User) (int64, error)
 	AddStackToUser(context.Context, *model.TelegramUser) error
 	SetCurrentStack(ctx context.Context, user *model.TelegramUser) (err error)
@@ -25,15 +25,23 @@ type Storage interface {
 	UpdateRecordTitle(context.Context, model.User, int) error
 	UpdateRecordType(context.Context, model.User, int) error
 	UpdateRecordStatus(context.Context, model.User, int) error
-	GetUserStackIDs(context.Context, model.User) ([]int64, error)
-	GetOwnedStacks(context.Context, model.User) ([]int64, error)
-	GetStack(context.Context, int64) (*model.Stack, error)
+	GetUserStacks(context.Context, model.User) ([]model.Stack, error)
+	GetOwnedStacks(context.Context, model.User) ([]model.Stack, error)
+	GetStackByID(context.Context, int64) (*model.Stack, error)
 	GetStackRecords(context.Context, int64) ([]model.Entry, error)
 	UpdateRecent(context.Context, model.User) error
-	Transaction(func() error) error
-	GetTransaction() (*sql.Tx, error)
+	Transaction(context.Context, func(context.Context) error) error
+	GetExecutor(context.Context) DBTX
 	Close()
 }
+
+type DBTX interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+type contextKey struct{}
 
 var queryInitSchema = []string{
 	`CREATE TABLE IF NOT EXISTS stacks (
@@ -119,6 +127,14 @@ const (
 		FROM stacks s
 		JOIN user_stacks us ON us.stack_id=s.id
 		WHERE us.user_id=?`
+	queryGetUserByID = `
+		SELECT
+			telegram_id,
+			recent_media,
+			created_at,
+			updated_at
+		FROM users 
+		WHERE telegram_id=?`
 	queryAddUser = `
 		INSERT INTO users(telegram_id)
 					VALUES(?)
@@ -253,18 +269,20 @@ func (s *SqliteStorage) initTables(ctx context.Context) error {
 }
 
 func (s *SqliteStorage) AddUser(ctx context.Context, user model.User) (err error) {
-	_, err = s.db.ExecContext(
+	executor := s.GetExecutor(ctx)
+	_, err = executor.ExecContext(
 		ctx,
 		queryAddUser,
 		user.GetTelegramID(),
 	)
 	return
 }
-func (s *SqliteStorage) GetUser(ctx context.Context, username string) (user model.TelegramUser, err error) {
-	panic("unimplemented")
+func (s *SqliteStorage) GetUser(ctx context.Context, userID int64) (user model.TelegramUser, err error) {
+	panic("implement me")
 }
 func (s *SqliteStorage) CreateStack(ctx context.Context, user model.User) (id int64, err error) {
-	res, err := s.db.ExecContext(
+	executor := s.GetExecutor(ctx)
+	res, err := executor.ExecContext(
 		ctx,
 		queryCreateStack,
 		user.GetTelegramID(),
@@ -276,7 +294,8 @@ func (s *SqliteStorage) CreateStack(ctx context.Context, user model.User) (id in
 	return res.LastInsertId()
 }
 func (s *SqliteStorage) AddStackToUser(ctx context.Context, user *model.TelegramUser) (err error) {
-	_, err = s.db.ExecContext(
+	executor := s.GetExecutor(ctx)
+	_, err = executor.ExecContext(
 		ctx,
 		queryAddStackToUser,
 		user.GetTelegramID(),
@@ -285,7 +304,8 @@ func (s *SqliteStorage) AddStackToUser(ctx context.Context, user *model.Telegram
 	return
 }
 func (s *SqliteStorage) SetCurrentStack(ctx context.Context, user *model.TelegramUser) (err error) {
-	_, err = s.db.ExecContext(
+	executor := s.GetExecutor(ctx)
+	_, err = executor.ExecContext(
 		ctx,
 		queryUpdateUserCurrentStack,
 		user.User.ID,
@@ -320,13 +340,91 @@ func (s *SqliteStorage) UpdateRecordStatus(ctx context.Context, user model.User,
 	_, err = s.db.ExecContext(ctx, queryUpdateRecordStatus, user.GetPayload(), recId)
 	return // TODO UPDATE STATUS
 }
-func (s *SqliteStorage) GetUserStackIDs(ctx context.Context, user model.User) (stacks []int64, err error) {
-	panic("unimplemented")
+func (s *SqliteStorage) GetUserStacks(ctx context.Context, user model.User) ([]model.Stack, error) {
+
+	rows, err := s.db.QueryContext(
+		ctx,
+		queryGetUserStacks,
+		user.GetTelegramID(),
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	defer func(*sql.Rows) {
+		_ = rows.Close()
+	}(rows)
+
+	var stacks []model.Stack
+
+	for rows.Next() {
+		var stack model.Stack
+
+		err = rows.Scan(
+			&stack.ID,
+			&stack.OwnerId,
+			&stack.Title,
+			&stack.Created,
+			&stack.Updated,
+		)
+
+		if err != nil {
+			return nil, fmt.Errorf("scan stack row error: %w", err)
+		}
+
+		stacks = append(stacks, stack)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows iteration error: %w", err)
+	}
+	return stacks, nil
 }
-func (s *SqliteStorage) GetOwnedStacks(ctx context.Context, user model.User) (stacks []int64, err error) {
-	panic("unimplemented")
+func (s *SqliteStorage) GetOwnedStacks(ctx context.Context, user model.User) ([]model.Stack, error) {
+
+	rows, err := s.db.QueryContext(
+		ctx,
+		queryGetOwnedStacks,
+		user.GetTelegramID(),
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	defer func(*sql.Rows) {
+		_ = rows.Close()
+	}(rows)
+
+	var stacks []model.Stack
+
+	for rows.Next() {
+		var stack model.Stack
+
+		err = rows.Scan(
+			&stack.ID,
+			&stack.OwnerId,
+			&stack.Title,
+			&stack.Created,
+			&stack.Updated,
+		)
+
+		if err != nil {
+			return nil, fmt.Errorf("scan stack row error: %w", err)
+		}
+
+		stacks = append(stacks, stack)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows iteration error: %w", err)
+	}
+	return stacks, nil
 }
-func (s *SqliteStorage) GetStack(ctx context.Context, stackID int64) (*model.Stack, error) {
+func (s *SqliteStorage) GetStackByID(ctx context.Context, stackID int64) (*model.Stack, error) {
 	var foo model.Stack
 	err := s.db.QueryRowContext(
 		ctx,
@@ -389,23 +487,30 @@ func (s *SqliteStorage) UpdateRecent(ctx context.Context, user model.User) (err 
 	return
 }
 
-func (s *SqliteStorage) Transaction(fn func() error) (err error) {
-	tx, err := s.db.Begin()
+func (s *SqliteStorage) WithContext(ctx context.Context, tx *sql.Tx) context.Context {
+	return context.WithValue(ctx, contextKey{}, tx)
+}
+func (s *SqliteStorage) GetExecutor(ctx context.Context) DBTX {
+	if tx, ok := ctx.Value(contextKey{}).(*sql.Tx); ok {
+		return tx
+	}
+	return s.db
+}
+func (s *SqliteStorage) Transaction(ctx context.Context, fn func(txXtx context.Context) error) (err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
 
 	defer func() {
 		if err != nil {
-			err = tx.Rollback()
+			_ = tx.Rollback()
 		}
 	}()
 
-	err = fn()
+	txCtx := s.WithContext(ctx, tx)
+	err = fn(txCtx)
 	if err != nil {
 		return err
 	}
 	return tx.Commit()
-}
-func (s *SqliteStorage) GetTransaction() (*sql.Tx, error) {
-	return s.db.Begin()
 }
 func (s *SqliteStorage) Close() {
 	_ = s.db.Close()

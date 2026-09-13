@@ -13,6 +13,8 @@ import (
 
 type BotService interface {
 	GetTelegramBot() *telego.Bot
+	AddNewUser(context.Context, *telego.User) error
+	GetUserByID(context.Context, int64) bool
 	CreateNewUserStack(context.Context, *telego.User, string) error
 	JoinUserStack(context.Context, *telego.User, int64) error
 	GetOwnedStacks(context.Context, *telego.User) ([]model.Stack, error)
@@ -26,23 +28,38 @@ type BotServiceStd struct {
 	logger Logger
 }
 
+func (s *BotServiceStd) GetUserByID(ctx context.Context, id int64) bool {
+	//s.db.GetUser()
+	panic("implement me")
+}
+
+func (s *BotServiceStd) AddNewUser(ctx context.Context, tUser *telego.User) error {
+	return s.db.Transaction(ctx, func(txCtx context.Context) error {
+		u := model.NewTelegramUser(tUser, "")
+		return s.db.AddUser(txCtx, u)
+	})
+}
+
 func (s *BotServiceStd) CreateNewUserStack(ctx context.Context, tUser *telego.User, title string) error {
-	return s.db.Transaction(func() error {
+	return s.db.Transaction(ctx, func(txCtx context.Context) error {
 		u := model.NewTelegramUser(tUser, title)
 
-		stackID, err := s.db.CreateStack(ctx, u)
+		stackID, err := s.db.CreateStack(txCtx, u)
 		if err != nil {
-			return err
+			return fmt.Errorf("create stack: %w", err)
 		}
 
 		u.SetCurrentStackID(stackID)
-		err = s.db.AddStackToUser(ctx, u)
+		err = s.db.AddStackToUser(txCtx, u)
 		if err != nil {
-			return err
+			return fmt.Errorf("add stack to user's: %w", err)
 		}
 
-		err = s.db.SetCurrentStack(ctx, u)
-		return err
+		err = s.db.SetCurrentStack(txCtx, u)
+		if err != nil {
+			return fmt.Errorf("set current stack: %w", err)
+		}
+		return nil
 	})
 }
 func (s *BotServiceStd) JoinUserStack(ctx context.Context, tUser *telego.User, stackID int64) error {
@@ -62,23 +79,15 @@ func (s *BotServiceStd) GetOwnedStacks(ctx context.Context, tUser *telego.User) 
 }
 func (s *BotServiceStd) GetUserStacks(ctx context.Context, tUser *telego.User) ([]model.Stack, error) {
 	user := model.NewTelegramUser(tUser, "")
-	stacks, err := s.db.GetUserStackIDs(ctx, user)
+	stacks, err := s.db.GetUserStacks(ctx, user)
 	if err != nil {
 		return nil, err
 	}
 	if len(stacks) == 0 {
 		return nil, nil
 	}
-	var result []model.Stack
-	for stack := range stacks {
-		r, err := s.db.GetStack(ctx, stacks[stack])
-		if err != nil {
-			return nil, err
-		}
-		result = append(result, *r)
-	}
 
-	return result, nil
+	return stacks, nil
 
 }
 
@@ -98,8 +107,9 @@ func NewBotServiceStd(logger Logger, cfg *config.Bot) *BotServiceStd {
 	dbService, err := db.NewSqliteStorage(&cfg.Db)
 	if err != nil {
 		logger.tempErrorHandle(
-			fmt.Errorf("error creating db service: %w", err),
-			Fatal,
+			Error,
+			CreatingDBErrorLog,
+			err,
 		)
 	}
 

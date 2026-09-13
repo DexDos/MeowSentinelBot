@@ -1,75 +1,61 @@
 package service
 
 import (
+	"fmt"
 	"log"
-	"strings"
 	"time"
 )
 
 type Logger interface {
 	panicHandle(error)
-	tempErrorHandle(error, Severity)
-	permErrorHandle(error, Severity)
-	LogEvent(string, Severity)
+	tempErrorHandle(t Severity, event LogErrorText, v ...any)
+	permErrorHandle(t Severity, event LogErrorText, v ...any)
+	LogEvent(t Severity, event LogErrorText, v ...any)
 }
 
 type StdLogger struct {
-	sb *strings.Builder
-	t  *time.Time
 	tz *time.Location
 }
 
 func NewStdLogger() *StdLogger {
-	var sb strings.Builder
-	t, err := time.Parse(time.UnixDate, "Wed Feb 25 11:06:39 PST 2015")
-	if err != nil {
-		panic(err)
-	}
-
 	tz, err := time.LoadLocation("Europe/Kyiv")
 	if err != nil {
-		panic(err)
+		tz = time.Local
 	}
 
 	return &StdLogger{
-		sb: &sb,
-		t:  &t,
 		tz: tz,
 	}
 }
 
-func (logger *StdLogger) tempErrorHandle(err error, severity Severity) {
-	//TODO implement me
-	panic("implement me")
+func (logger *StdLogger) tempErrorHandle(t Severity, event LogErrorText, v ...any) {
+	logger.LogEvent(t, event, v)
 }
 
-func (logger *StdLogger) permErrorHandle(err error, severity Severity) {
-	//TODO implement me
-	panic("implement me")
+func (logger *StdLogger) permErrorHandle(t Severity, event LogErrorText, v ...any) {
+	logger.LogEvent(t, event, v)
 }
 
 func (logger *StdLogger) panicHandle(err error) {
-	logger.LogEvent(err.Error(), Error)
+	logger.LogEvent(Fatal, PanicLog, err)
 	panic(err)
 }
 
-func (logger *StdLogger) LogEvent(event string, t Severity) {
+func (logger *StdLogger) LogEvent(t Severity, event LogErrorText, v ...any) {
+	currentTime := time.Now().In(logger.tz).Format(time.UnixDate)
+	errText := fmt.Sprintf(
+		string(event),
+		v,
+	)
 	log.Printf(
-		"[%s] :: [%s]\n :: %s\n\n",
+		"\n]] :: [%s] :: [%s]\n :: %s\n\n",
 		t.String(),
-		logger.t.In(logger.tz).Format(time.UnixDate),
-		event,
+		currentTime,
+		errText,
 	)
 }
 
 type Severity int
-
-const (
-	Fatal Severity = iota
-	NonFatal
-)
-
-type Type int
 
 func (t Severity) String() string {
 	switch t {
@@ -89,9 +75,23 @@ func (t Severity) String() string {
 }
 
 const (
-	Error Severity = iota
+	Fatal Severity = iota
+	Error
 	Warning
 	Info
 	LifeCycle
 	Debug
+)
+
+type LogErrorText string
+
+const (
+	BotStart                 LogErrorText = "Bot is starting"
+	BotStop                  LogErrorText = "Bot is stopped"
+	PanicLog                 LogErrorText = "error due to %v"
+	InvalidNewStackNameLog   LogErrorText = "error while tried to create a stack %s for user id[%d]: %v"
+	InvalidStackIDLog        LogErrorText = "error while trying to convert user input (%v) into integer. UserID[%d]: %v"
+	MessageSendingFailureLog LogErrorText = "failed to send message to id[%v] %v due to %v"
+	CreatingDBErrorLog       LogErrorText = "error creating db service: %v"
+	DBErrorLog               LogErrorText = "error while db running: %v"
 )
