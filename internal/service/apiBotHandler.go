@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -20,8 +21,8 @@ type APIHandler interface {
 }
 
 var (
-	PendingStd       = 10 * time.Minute
-	PendingProlonged = 1 * time.Hour
+	PendingStd       = 20 * time.Second
+	PendingProlonged = 2 * time.Minute
 )
 
 type StateStrategy func(ctx *th.Context, update telego.Update) error
@@ -37,9 +38,9 @@ type APIBotHandler struct {
 
 func (h *APIBotHandler) StartBot(r *Responder) {
 	h.sr = map[State]StateStrategy{
-		StateNone:                     h.handleStateNone,
-		StateWaitForNewStackName:      h.handleNewStackInput,
-		StateWaitForExistingStackName: h.handleJoinStackInput,
+		StateNone:                     h.stateNone,
+		StateWaitForNewStackName:      h.newStackInput,
+		StateWaitForExistingStackName: h.joinStackInput,
 	}
 	h.responder = *r
 
@@ -68,8 +69,14 @@ func (h *APIBotHandler) StartBot(r *Responder) {
 
 	//bh.Group()
 
-	bh.Handle(h.handleStart(), th.CommandEqual("start"))
-	bh.Handle(h.handleMainMenu(), th.CommandEqual("menu"))
+	bh.Handle(h.startCmd(), th.CommandEqual("start"))
+	bh.Handle(func(ctx th.Context, upd telego.Update) error {
+		ev := model.ExtractEvent(update)
+		return h.mainMenu(ctx, ev)
+	}, th.CommandEqual("menu"))
+	bh.HandleCallbackQuery(func(ctx *th.Context, query telego.CallbackQuery) error {
+
+	}, th.CallbackDataPrefix("menu:main"))
 	bh.HandleCallbackQuery(
 		h.callbackWithState(StateWaitForNewStackName, h.responder.RespondToNewStackCmdCallback),
 		th.CallbackDataEqual("stack:new-stack"),
@@ -78,9 +85,10 @@ func (h *APIBotHandler) StartBot(r *Responder) {
 		h.callbackWithState(StateWaitForExistingStackName, h.responder.RespondToJoinStackCmdCallback),
 		th.CallbackDataEqual("stack:join-stack"),
 	)
-	bh.HandleCallbackQuery(h.handleCancellation, th.CallbackDataPrefix("action:deny"))
+	bh.HandleCallbackQuery(h.stackView(), th.CallbackDataPrefix("stack:view:"))
+	bh.HandleCallbackQuery(h.cancellation(), th.CallbackDataEqual("action:deny"))
 
-	bh.Handle(h.handleStateManagement(), th.AnyMessageWithText())
+	bh.Handle(h.stateManagement(), th.AnyMessageWithText())
 	// create-or-chose-stack
 	// stack chosen -> watch stack
 	// actions: filter, edit, add, remove, ...
@@ -100,7 +108,7 @@ func (h *APIBotHandler) StartBot(r *Responder) {
 	_ = bh.Stop()
 }
 
-func (h *APIBotHandler) handleStart() th.Handler {
+func (h *APIBotHandler) startCmd() th.Handler {
 	return func(ctx *th.Context, update telego.Update) error {
 		ev := model.ExtractEvent(update)
 		err := h.bot.AddNewUser(ctx, ev.User)
@@ -123,7 +131,7 @@ func (h *APIBotHandler) handleStart() th.Handler {
 		return nil
 	}
 }
-func (h *APIBotHandler) handleStateManagement() th.Handler {
+func (h *APIBotHandler) stateManagement() th.Handler {
 	return func(ctx *th.Context, update telego.Update) error {
 		userState := h.fsm.GetState(update.Message.From.ID)
 
@@ -135,57 +143,113 @@ func (h *APIBotHandler) handleStateManagement() th.Handler {
 	}
 }
 
-func (h *APIBotHandler) handleStackSettingsMenu(ctx *th.Context, update telego.Update) error {
-	return nil
-}
-func (h *APIBotHandler) handleStackView(ctx *th.Context, update telego.Update) error {
-	return nil
-}
-
-func (h *APIBotHandler) handleCancellation(ctx *th.Context, callback telego.CallbackQuery) error {
-	ev := model.ExtractEventFromCallback(&callback)
-	h.fsm.CleanState(ev.UserID)
-
-	err := h.teleBot.AnswerCallbackQuery(
-		ctx.Context(),
-		tu.CallbackQuery(ev.CallbackID).
-			WithText("Pending..."))
-	if err != nil {
-		return err
+func (h *APIBotHandler) stackSettingsMenu() th.CallbackQueryHandler {
+	return func(ctx *th.Context, callback telego.CallbackQuery) error {
+		return nil
 	}
-
-	editedMsg := h.responder.RespondToCancellationCallback(ev)
-	_, err = h.teleBot.EditMessageText(ctx, editedMsg)
-
-	return err
 }
-
-func (h *APIBotHandler) handleMainMenu() th.Handler {
-	return func(ctx *th.Context, update telego.Update) error {
-		ev := model.ExtractEvent(update)
-		stacks, err := h.bot.GetUserStacks(ctx, ev.User)
+func (h *APIBotHandler) stackView() th.CallbackQueryHandler {
+	return func(ctx *th.Context, callback telego.CallbackQuery) error {
+		ev := model.ExtractEventFromCallback(&callback)
+		stackID, err := strconv.ParseInt(
+			strings.TrimPrefix(callback.Data, "stack:view:"),
+			10,
+			64,
+		)
 		if err != nil {
 			h.log.permErrorHandle(
 				Error,
-				MessageSendingFailureLog,
+				InvalidStackIDLog,
+				stackID,
 				ev.User.ID,
-				ev.User.Username,
 				err,
 			)
 			return err
 		}
 
-		msg := h.responder.RespondWithMainMenu(&ev, stacks)
-		_, err = h.teleBot.SendMessage(ctx.Context(), msg)
+		defer func() {
+			_ = h.teleBot.AnswerCallbackQuery(
+				ctx.Context(),
+				tu.CallbackQuery(ev.CallbackID).
+					WithText("Pending..."))
+			if err != nil {
+				h.log.permErrorHandle(Warning, DBErrorLog, err)
+			}
+		}()
+
+		stackInfo, err := h.bot.GetStackInfo(ctx, stackID)
+		if err != nil {
+			h.responder.RespondWithError(ev, SystemError)
+			return err
+		}
+
+		err = h.bot.SelectUserStack(ctx, ev.User, stackInfo.ID)
+		if err != nil {
+			h.responder.RespondWithError(ev, SystemError)
+			return err
+		}
+
+		entries, err := h.bot.GetCurrentStackEntries(ctx, ev.User)
+		if err != nil {
+			h.responder.RespondWithError(ev, SystemError)
+			return err
+		}
+		if len(entries) == 0 || entries == nil {
+			h.responder.RespondWithError(ev, StackIsEmpty) // TODO change to RespondWithStackIsEmpty
+		}
+
+		stack := model.NewStack(stackInfo, entries)
+
+		msg := h.responder.RespondWithCurrentStackView(ev, stack)
+		_, err = h.teleBot.EditMessageText(ctx, msg)
+
 		return err
 	}
 }
 
-func (h *APIBotHandler) handleStateNone(ctx *th.Context, update telego.Update) error {
+func (h *APIBotHandler) cancellation() th.CallbackQueryHandler {
+	return func(ctx *th.Context, callback telego.CallbackQuery) error {
+		ev := model.ExtractEventFromCallback(&callback)
+		h.fsm.CleanState(ev.UserID)
+
+		err := h.teleBot.AnswerCallbackQuery(
+			ctx.Context(),
+			tu.CallbackQuery(ev.CallbackID).
+				WithText("Pending..."))
+		if err != nil {
+			return err
+		}
+
+		editedMsg := h.responder.RespondToCancellationCallback(ev)
+		_, err = h.teleBot.EditMessageText(ctx, editedMsg)
+
+		return err
+	}
+}
+
+func (h *APIBotHandler) mainMenu(ctx *th.Context, ev *model.EventContext) error {
+	stacks, err := h.bot.GetUserStacks(ctx, ev.User)
+	if err != nil {
+		h.log.permErrorHandle(
+			Error,
+			MessageSendingFailureLog,
+			ev.User.ID,
+			ev.User.Username,
+			err,
+		)
+		return err
+	}
+
+	msg := h.responder.RespondWithMainMenu(&ev, stacks)
+	_, err = h.teleBot.SendMessage(ctx.Context(), msg)
+	return err
+}
+
+func (h *APIBotHandler) stateNone(ctx *th.Context, update telego.Update) error {
 	return nil
 }
 
-func (h *APIBotHandler) handleNewStackInput(ctx *th.Context, update telego.Update) error {
+func (h *APIBotHandler) newStackInput(ctx *th.Context, update telego.Update) error {
 	ev := model.ExtractEvent(update)
 	title := update.Message.Text
 
@@ -212,7 +276,7 @@ func (h *APIBotHandler) handleNewStackInput(ctx *th.Context, update telego.Updat
 	return nil
 }
 
-func (h *APIBotHandler) handleJoinStackInput(ctx *th.Context, update telego.Update) error {
+func (h *APIBotHandler) joinStackInput(ctx *th.Context, update telego.Update) error {
 	ev := model.ExtractEvent(update)
 
 	defer h.fsm.CleanState(ev.UserID)

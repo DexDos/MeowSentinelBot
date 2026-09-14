@@ -43,11 +43,11 @@ func (u *TelegramUser) SetCurrentStackID(newID int64) {
 	u.UserData.CurrentStackID = newID
 }
 
-func NewTelegramUser(user *telego.User, p string) *TelegramUser {
+func NewTelegramUser(user *telego.User, payload string) *TelegramUser {
 	return &TelegramUser{
 		User: user,
 		UserData: UserData{
-			Payload: p,
+			Payload: payload,
 		},
 	}
 }

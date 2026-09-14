@@ -43,10 +43,15 @@ func (logger *StdLogger) panicHandle(err error) {
 
 func (logger *StdLogger) LogEvent(t Severity, event LogErrorText, v ...any) {
 	currentTime := time.Now().In(logger.tz).Format(time.UnixDate)
-	errText := fmt.Sprintf(
-		string(event),
-		v,
-	)
+	var errText string
+	if v == nil {
+		errText = fmt.Sprintf(string(event))
+	} else {
+		errText = fmt.Sprintf(
+			string(event),
+			v,
+		)
+	}
 	log.Printf(
 		"\n]] :: [%s] :: [%s]\n :: %s\n\n",
 		t.String(),

@@ -21,13 +21,14 @@ type Storage interface {
 	CreateStack(context.Context, model.User) (int64, error)
 	AddStackToUser(context.Context, *model.TelegramUser) error
 	SetCurrentStack(ctx context.Context, user *model.TelegramUser) (err error)
+	GetCurrentStack(ctx context.Context, user *model.TelegramUser) (stackID int64, err error)
 	AddRecord(context.Context, model.User) error
 	UpdateRecordTitle(context.Context, model.User, int) error
 	UpdateRecordType(context.Context, model.User, int) error
 	UpdateRecordStatus(context.Context, model.User, int) error
-	GetUserStacks(context.Context, model.User) ([]model.Stack, error)
-	GetOwnedStacks(context.Context, model.User) ([]model.Stack, error)
-	GetStackByID(context.Context, int64) (*model.Stack, error)
+	GetUserStacks(context.Context, model.User) ([]model.StackInfo, error)
+	GetOwnedStacks(context.Context, model.User) ([]model.StackInfo, error)
+	GetStackByID(context.Context, int64) (*model.StackInfo, error)
 	GetStackRecords(context.Context, int64) ([]model.Entry, error)
 	UpdateRecent(context.Context, model.User) error
 	Transaction(context.Context, func(context.Context) error) error
@@ -135,6 +136,11 @@ const (
 			updated_at
 		FROM users 
 		WHERE telegram_id=?`
+	queryGetCurrentUserStack = `
+		SELECT
+			stack_id
+		FROM selected_user_stacks 
+		WHERE user_id=?`
 	queryAddUser = `
 		INSERT INTO users(telegram_id)
 					VALUES(?)
@@ -313,6 +319,21 @@ func (s *SqliteStorage) SetCurrentStack(ctx context.Context, user *model.Telegra
 	)
 	return
 }
+func (s *SqliteStorage) GetCurrentStack(ctx context.Context, user *model.TelegramUser) (stackID int64, err error) {
+	executor := s.GetExecutor(ctx)
+	err = executor.QueryRowContext(
+		ctx,
+		queryGetCurrentUserStack,
+		user.User.ID,
+	).Scan(&stackID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	return
+}
 func (s *SqliteStorage) AddRecord(ctx context.Context, user model.User) error {
 	foo, err := user.GetDataForNewRecord()
 	if err != nil {
@@ -340,7 +361,7 @@ func (s *SqliteStorage) UpdateRecordStatus(ctx context.Context, user model.User,
 	_, err = s.db.ExecContext(ctx, queryUpdateRecordStatus, user.GetPayload(), recId)
 	return // TODO UPDATE STATUS
 }
-func (s *SqliteStorage) GetUserStacks(ctx context.Context, user model.User) ([]model.Stack, error) {
+func (s *SqliteStorage) GetUserStacks(ctx context.Context, user model.User) ([]model.StackInfo, error) {
 
 	rows, err := s.db.QueryContext(
 		ctx,
@@ -358,10 +379,10 @@ func (s *SqliteStorage) GetUserStacks(ctx context.Context, user model.User) ([]m
 		_ = rows.Close()
 	}(rows)
 
-	var stacks []model.Stack
+	var stacks []model.StackInfo
 
 	for rows.Next() {
-		var stack model.Stack
+		var stack model.StackInfo
 
 		err = rows.Scan(
 			&stack.ID,
@@ -382,7 +403,7 @@ func (s *SqliteStorage) GetUserStacks(ctx context.Context, user model.User) ([]m
 	}
 	return stacks, nil
 }
-func (s *SqliteStorage) GetOwnedStacks(ctx context.Context, user model.User) ([]model.Stack, error) {
+func (s *SqliteStorage) GetOwnedStacks(ctx context.Context, user model.User) ([]model.StackInfo, error) {
 
 	rows, err := s.db.QueryContext(
 		ctx,
@@ -400,10 +421,10 @@ func (s *SqliteStorage) GetOwnedStacks(ctx context.Context, user model.User) ([]
 		_ = rows.Close()
 	}(rows)
 
-	var stacks []model.Stack
+	var stacks []model.StackInfo
 
 	for rows.Next() {
-		var stack model.Stack
+		var stack model.StackInfo
 
 		err = rows.Scan(
 			&stack.ID,
@@ -424,8 +445,8 @@ func (s *SqliteStorage) GetOwnedStacks(ctx context.Context, user model.User) ([]
 	}
 	return stacks, nil
 }
-func (s *SqliteStorage) GetStackByID(ctx context.Context, stackID int64) (*model.Stack, error) {
-	var foo model.Stack
+func (s *SqliteStorage) GetStackByID(ctx context.Context, stackID int64) (*model.StackInfo, error) {
+	var foo model.StackInfo
 	err := s.db.QueryRowContext(
 		ctx,
 		queryGetStackById,

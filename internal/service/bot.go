@@ -17,15 +17,25 @@ type BotService interface {
 	GetUserByID(context.Context, int64) bool
 	CreateNewUserStack(context.Context, *telego.User, string) error
 	JoinUserStack(context.Context, *telego.User, int64) error
-	GetOwnedStacks(context.Context, *telego.User) ([]model.Stack, error)
-	GetUserStacks(context.Context, *telego.User) ([]model.Stack, error)
+	GetOwnedStacks(context.Context, *telego.User) ([]model.StackInfo, error)
+	GetUserStacks(context.Context, *telego.User) ([]model.StackInfo, error)
+	GetStackInfo(context.Context, int64) (*model.StackInfo, error)
 	SelectUserStack(context.Context, *telego.User, int64) error
+	GetCurrentStackEntries(context.Context, *telego.User) ([]model.Entry, error)
 }
 
 type BotServiceStd struct {
 	Bot    *telego.Bot
 	db     db.Storage
 	logger Logger
+}
+
+func (s *BotServiceStd) GetStackInfo(ctx context.Context, stackID int64) (*model.StackInfo, error) {
+	info, err := s.db.GetStackByID(ctx, stackID)
+	if err != nil {
+		return nil, fmt.Errorf("error while trying to fetch stack info: %w", err)
+	}
+	return info, nil
 }
 
 func (s *BotServiceStd) GetUserByID(ctx context.Context, id int64) bool {
@@ -63,6 +73,7 @@ func (s *BotServiceStd) CreateNewUserStack(ctx context.Context, tUser *telego.Us
 	})
 }
 func (s *BotServiceStd) JoinUserStack(ctx context.Context, tUser *telego.User, stackID int64) error {
+	// TODO executor := s.db.GetExecutor(ctx)
 	u := model.NewTelegramUser(tUser, "")
 	u.SetCurrentStackID(stackID)
 	err := s.db.AddStackToUser(ctx, u)
@@ -74,10 +85,10 @@ func (s *BotServiceStd) JoinUserStack(ctx context.Context, tUser *telego.User, s
 	return err
 }
 
-func (s *BotServiceStd) GetOwnedStacks(ctx context.Context, tUser *telego.User) ([]model.Stack, error) {
+func (s *BotServiceStd) GetOwnedStacks(ctx context.Context, tUser *telego.User) ([]model.StackInfo, error) {
 	panic("implement me")
 }
-func (s *BotServiceStd) GetUserStacks(ctx context.Context, tUser *telego.User) ([]model.Stack, error) {
+func (s *BotServiceStd) GetUserStacks(ctx context.Context, tUser *telego.User) ([]model.StackInfo, error) {
 	user := model.NewTelegramUser(tUser, "")
 	stacks, err := s.db.GetUserStacks(ctx, user)
 	if err != nil {
@@ -100,6 +111,22 @@ func (s *BotServiceStd) SelectUserStack(ctx context.Context, tUser *telego.User,
 	u := model.NewTelegramUser(tUser, "")
 	u.SetCurrentStackID(stackID)
 	return s.db.SetCurrentStack(ctx, u)
+}
+
+func (s *BotServiceStd) GetCurrentStackEntries(ctx context.Context, tUser *telego.User) ([]model.Entry, error) {
+	u := model.NewTelegramUser(tUser, "")
+	stackID, err := s.db.GetCurrentStack(ctx, u)
+	if stackID == 0 {
+		if err != nil {
+			return nil, fmt.Errorf("error on fetching current stack ID: %w", err)
+		}
+		return nil, nil
+	}
+	entries, err := s.db.GetStackRecords(ctx, stackID)
+	if err != nil {
+		return nil, fmt.Errorf("error on fetching stack records: %w", err)
+	}
+	return entries, nil
 }
 
 func NewBotServiceStd(logger Logger, cfg *config.Bot) *BotServiceStd {

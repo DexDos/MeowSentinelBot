@@ -1,6 +1,9 @@
 package model
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 type Entry struct {
 	Id      int64
@@ -10,4 +13,28 @@ type Entry struct {
 	Status  Status
 	Created time.Time
 	Updated time.Time
+}
+
+func (e *Entry) String() string {
+	return fmt.Sprintf(
+		"[%d]**%s**: %v\n",
+		e.Id,
+		e.Title,
+		e.Status,
+	)
+}
+
+type Status struct {
+	Season          int16
+	LastEpisodeSeen int16
+	Rating          Rating
+}
+
+func (s *Status) String() string {
+	return fmt.Sprintf(
+		"( %d | %d ) :: %v",
+		s.Season,
+		s.LastEpisodeSeen,
+		s.Rating,
+	)
 }
