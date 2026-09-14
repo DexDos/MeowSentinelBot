@@ -22,6 +22,8 @@ type BotService interface {
 	GetStackInfo(context.Context, int64) (*model.StackInfo, error)
 	SelectUserStack(context.Context, *telego.User, int64) error
 	GetCurrentStackEntries(context.Context, *telego.User) ([]model.Entry, error)
+	AddNewEntry(context.Context, *telego.User, string) (int64, error)
+	UpdateEntry(context.Context, int64, db.EntryField, string) error
 }
 
 type BotServiceStd struct {
@@ -127,6 +129,22 @@ func (s *BotServiceStd) GetCurrentStackEntries(ctx context.Context, tUser *teleg
 		return nil, fmt.Errorf("error on fetching stack records: %w", err)
 	}
 	return entries, nil
+}
+
+func (s *BotServiceStd) AddNewEntry(ctx context.Context, tUser *telego.User, payload string) (int64, error) {
+	u := model.NewTelegramUser(tUser, payload)
+	entryID, err := s.db.AddEntry(ctx, u)
+	if err != nil {
+		return 0, fmt.Errorf("error on adding new entry: %w", err)
+	}
+	return entryID, nil
+}
+func (s *BotServiceStd) UpdateEntry(ctx context.Context, entryID int64, field db.EntryField, payload string) error {
+	err := s.db.UpdateEntryField(ctx, entryID, field, payload)
+	if err != nil {
+		return fmt.Errorf("error on updating entry: %w", err)
+	}
+	return nil
 }
 
 func NewBotServiceStd(logger Logger, cfg *config.Bot) *BotServiceStd {

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -22,10 +23,8 @@ type Storage interface {
 	AddStackToUser(context.Context, *model.TelegramUser) error
 	SetCurrentStack(ctx context.Context, user *model.TelegramUser) (err error)
 	GetCurrentStack(ctx context.Context, user *model.TelegramUser) (stackID int64, err error)
-	AddRecord(context.Context, model.User) error
-	UpdateRecordTitle(context.Context, model.User, int) error
-	UpdateRecordType(context.Context, model.User, int) error
-	UpdateRecordStatus(context.Context, model.User, int) error
+	AddEntry(context.Context, model.User) (int64, error)
+	UpdateEntryField(context.Context, int64, EntryField, string) error
 	GetUserStacks(context.Context, model.User) ([]model.StackInfo, error)
 	GetOwnedStacks(context.Context, model.User) ([]model.StackInfo, error)
 	GetStackByID(context.Context, int64) (*model.StackInfo, error)
@@ -183,6 +182,16 @@ const (
 		UPDATE users
 		SET recent_media = ?
 		WHERE telegram_id = ?`
+	queryUpdateEntryField = "UPDATE" + `entries SET %s=? WHERE id=?`
+)
+
+type EntryField string
+
+const (
+	EntryTitleField          EntryField = "title"
+	EntryTypeField           EntryField = "type"
+	EntryCurrentSeasonField  EntryField = "current_season"
+	EntryCurrentEpisodeField EntryField = "current_episode"
 )
 
 type SqliteStorage struct {
@@ -334,33 +343,51 @@ func (s *SqliteStorage) GetCurrentStack(ctx context.Context, user *model.Telegra
 	}
 	return
 }
-func (s *SqliteStorage) AddRecord(ctx context.Context, user model.User) error {
-	foo, err := user.GetDataForNewRecord()
-	if err != nil {
-		return fmt.Errorf("error while getting user data for new record: %w", err)
-	}
-	_, err = s.db.ExecContext(
+func (s *SqliteStorage) AddEntry(ctx context.Context, user model.User) (entryID int64, err error) {
+	foo := user.GetPayload()
+	res, err := s.db.ExecContext(
 		ctx,
 		queryAddRecord,
-		foo.StackID,
-		foo.RecTitle,
-		foo.RecType,
-		foo.RecStatus, //TODO update status
+		user.GetCurrentStackID(),
+		foo,
+		"—",
+		0,
+		0, //foo.RecStatus, //TODO update status
+	)
+	if err != nil {
+		return 0, err
+	}
+	entryID, err = res.LastInsertId()
+	return
+}
+func (s *SqliteStorage) UpdateEntryField(ctx context.Context, eID int64, f EntryField, rawValue string) (err error) {
+	executor := s.GetExecutor(ctx)
+	var parsedValue any
+
+	switch f {
+	case EntryTitleField, EntryTypeField:
+		parsedValue = rawValue
+	case EntryCurrentSeasonField, EntryCurrentEpisodeField:
+		val, err := strconv.ParseInt(rawValue, 10, 64)
+		if err != nil {
+			return fmt.Errorf("invalid integer payload for %s: %w", f, err)
+		}
+		parsedValue = val
+	default:
+		return fmt.Errorf("forbidden or unknown column: %s", f)
+	}
+
+	query := fmt.Sprintf(queryUpdateEntryField, string(f))
+
+	_, err = executor.ExecContext(
+		ctx,
+		query,
+		parsedValue,
+		eID,
 	)
 	return err
 }
-func (s *SqliteStorage) UpdateRecordTitle(ctx context.Context, user model.User, recId int) (err error) {
-	_, err = s.db.ExecContext(ctx, queryUpdateRecordTitle, user.GetPayload(), recId)
-	return
-}
-func (s *SqliteStorage) UpdateRecordType(ctx context.Context, user model.User, recId int) (err error) {
-	_, err = s.db.ExecContext(ctx, queryUpdateRecordType, user.GetPayload(), recId)
-	return
-}
-func (s *SqliteStorage) UpdateRecordStatus(ctx context.Context, user model.User, recId int) (err error) {
-	_, err = s.db.ExecContext(ctx, queryUpdateRecordStatus, user.GetPayload(), recId)
-	return // TODO UPDATE STATUS
-}
+
 func (s *SqliteStorage) GetUserStacks(ctx context.Context, user model.User) ([]model.StackInfo, error) {
 
 	rows, err := s.db.QueryContext(

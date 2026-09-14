@@ -20,6 +20,9 @@ type Responder interface {
 	RespondToStart(*model.EventContext) *telego.SendMessageParams
 	RespondToNewStackCmdCallback(*model.EventContext) *telego.EditMessageTextParams
 	RespondToJoinStackCmdCallback(*model.EventContext) *telego.EditMessageTextParams
+	RespondWithNewEntryRecordMenu(ev *model.EventContext, si *model.StackInfo) *telego.EditMessageTextParams
+	RespondWithStackIsEmpty(ev *model.EventContext, si *model.StackInfo) *telego.EditMessageTextParams
+	RespondToFieldUpdate(ev *model.EventContext) *telego.SendMessageParams
 }
 
 type StdResponder struct {
@@ -57,7 +60,7 @@ func (r StdResponder) RespondWithCurrentStackView(ev *model.EventContext, stack 
 	keyboard := tu.InlineKeyboard(
 		tu.InlineKeyboardRow(
 			tu.InlineKeyboardButton("👀 Update record").WithCallbackData(
-				fmt.Sprintf("stack:filter:%d", stack.Info.ID),
+				fmt.Sprintf("stack:pick:%d", stack.Info.ID),
 			),
 		),
 		tu.InlineKeyboardRow(
@@ -120,16 +123,30 @@ func (r StdResponder) RespondToCancellationCallback(ev *model.EventContext) *tel
 }
 
 func (r StdResponder) RespondWithError(ev *model.EventContext, err ErrorText) *telego.SendMessageParams {
-	//TODO implement me
+	prompt := "*Unfortunately*, we've run into an *issue*: \n" + string(err)
+	keyboard := tu.InlineKeyboard(tu.InlineKeyboardRow(
+		tu.InlineKeyboardButton("Back to menu").WithCallbackData("menu:main"),
+	))
+	msg := tu.Message(ev.ChatID, prompt).WithReplyMarkup(keyboard).WithParseMode(telego.ModeMarkdown)
+	return msg
+}
+
+func (r StdResponder) RespondToFieldUpdate(ev *model.EventContext) *telego.SendMessageParams {}
+
+func (r StdResponder) RespondWithStackIsEmpty(ev *model.EventContext, si *model.StackInfo) *telego.EditMessageTextParams {
+	prompt := string(stackIsEmpty + newEntryInstructionsTitle)
+
+	keyboard := tu.InlineKeyboard(tu.InlineKeyboardRow(
+		tu.InlineKeyboardButton("Cancel").WithCallbackData("action:deny"),
+	))
+
+	msg := tu.EditMessageText(ev.ChatID, ev.MessageID, prompt).
+		WithReplyMarkup(keyboard).WithParseMode(telego.ModeMarkdown)
+	return msg
+}
+
+func (r StdResponder) RespondWithNewEntryRecordMenu(ev *model.EventContext, si *model.StackInfo) *telego.EditMessageTextParams {
 	panic("implement me")
-}
-
-func (r StdResponder) RespondWithStackIsEmpty(ev *model.EventContext) *telego.EditMessageTextParams {
-
-}
-
-func (r StdResponder) RespondWithNewEntryRecordMenu(ev *model.EventContext) *telego.EditMessageTextParams {
-
 }
 
 func (r StdResponder) RespondWithMainMenu(ev *model.EventContext, stacks []model.StackInfo) *telego.SendMessageParams {
@@ -175,6 +192,14 @@ func (r StdResponder) RespondRandomly() error {
 	return nil
 }
 
+type UserInputPrompt string
+
+const (
+	stackIsEmpty              UserInputPrompt = "It seems that your stack is empty at this point 🥺\n\nLet's configure your *first record*!✨\n"
+	newEntryInstructionsTitle UserInputPrompt = "The very first thing you need to specify would be the *record title* (e.g., Game of Thrones). Feel free to use any alias so that you could distinguish your records later on (GoT).\n\n*Enter the record name*:"
+	newEntryInstructionsType  UserInputPrompt = "New Entry"
+)
+
 type ResponseFormat string
 
 const (
@@ -187,6 +212,6 @@ type ErrorText string
 const (
 	InvalidStackName ErrorText = "Failed to create stack. Make sure you didn't put any shenanigans as a stack name. "
 	InvalidStackID   ErrorText = "Failed to recognize stackID. Make sure you have a valid stackID. "
-	StackIsEmpty     ErrorText = "StackInfo is empty."
+	StackIsEmpty     ErrorText = "Stack is empty."
 	SystemError      ErrorText = "Unknown error."
 )

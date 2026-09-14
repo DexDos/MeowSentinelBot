@@ -18,10 +18,11 @@ type User interface {
 
 type OddData interface{}
 type DataForNewStack struct {
-	StackID   int64  `json:"stack_id"`
-	RecTitle  string `json:"rec_title"`
-	RecType   string `json:"rec_type"`
-	RecStatus string `json:"rec_status"`
+	StackID         uint64
+	RecTitle        string
+	RecType         string
+	RecLastSeason   uint8
+	RecStartEpisode uint16
 }
 type UserData struct {
 	Payload        string
@@ -71,7 +72,7 @@ func (u *TelegramUser) GetDataForNewRecord() (DataForNewStack, error) {
 		return DataForNewStack{}, errors.New("user's payload is empty")
 	}
 	var data DataForNewStack
-	data.StackID = u.UserData.CurrentStackID
+	data.StackID = uint64(u.UserData.CurrentStackID)
 
 	err := utils.ParseJSONFromString(u.UserData.Payload, &data)
 	return data, err

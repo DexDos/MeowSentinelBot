@@ -25,10 +25,10 @@ func ExtractEventFromCallback(cb *telego.CallbackQuery) *EventContext {
 	}
 }
 
-func ExtractEvent(update telego.Update) EventContext {
+func ExtractEvent(update telego.Update) *EventContext {
 	if update.CallbackQuery != nil {
 		cb := update.CallbackQuery
-		return EventContext{
+		return &EventContext{
 			ChatID:     tu.ID(cb.Message.GetChat().ID),
 			UserID:     cb.From.ID,
 			User:       &cb.From,
@@ -38,7 +38,7 @@ func ExtractEvent(update telego.Update) EventContext {
 		}
 	}
 	if update.Message != nil {
-		return EventContext{
+		return &EventContext{
 			ChatID:     tu.ID(update.Message.Chat.ID),
 			UserID:     update.Message.From.ID,
 			User:       update.Message.From,
@@ -46,5 +46,5 @@ func ExtractEvent(update telego.Update) EventContext {
 			IsCallback: false,
 		}
 	}
-	return EventContext{}
+	return &EventContext{}
 }
