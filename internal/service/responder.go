@@ -131,7 +131,10 @@ func (r StdResponder) RespondWithError(ev *model.EventContext, err ErrorText) *t
 	return msg
 }
 
-func (r StdResponder) RespondToFieldUpdate(ev *model.EventContext) *telego.SendMessageParams {}
+func (r StdResponder) RespondToFieldUpdate(ev *model.EventContext) *telego.SendMessageParams {
+	//TODO implement me
+	panic("implement me")
+}
 
 func (r StdResponder) RespondWithStackIsEmpty(ev *model.EventContext, si *model.StackInfo) *telego.EditMessageTextParams {
 	prompt := string(stackIsEmpty + newEntryInstructionsTitle)

@@ -43,7 +43,7 @@ func (h *APIBotHandler) StartBot(r *Responder) {
 		StateNone:                     h.stateNone,
 		StateWaitForNewStackName:      h.newStackInput,
 		StateWaitForExistingStackName: h.joinStackInput,
-		StateWaitForNewEntryTitle:     h.recordModification(
+		StateWaitForNewEntryTitle: h.recordModification(
 			db.EntryTitleField,
 			h.responder.RespondToFieldUpdate,
 			StateWaitForNewEntryType,
@@ -258,18 +258,18 @@ func (h *APIBotHandler) recordModification(field db.EntryField, fn RespondFuncSe
 		h.fsm.SetState(ev.UserID, nextState, PendingProlonged)
 		entry, exists := h.fsm.GetEntry(ev.UserID)
 		if !exists {
-			msg := h.responder.RespondWithError(ev, SystemError)\
+			msg := h.responder.RespondWithError(ev, SystemError)
 			_, _ = h.teleBot.SendMessage(ctx, msg)
 			return fmt.Errorf("no entry found in fsm")
 		}
 		err := h.bot.UpdateEntry(ctx, entry, field, update.Message.Text) //TODO define how to retrieve an entry id (with fsm?)
 		if err != nil {
-			msg := h.responder.RespondWithError(ev, SystemError)\
+			msg := h.responder.RespondWithError(ev, SystemError)
 			_, _ = h.teleBot.SendMessage(ctx, msg)
 			return err
 		}
 		msg := fn(ev)
-		_, err = h.teleBot.SendMessage(ctx,msg)
+		_, err = h.teleBot.SendMessage(ctx, msg)
 		return err
 	}
 }
