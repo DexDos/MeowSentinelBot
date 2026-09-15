@@ -22,7 +22,7 @@ type Storage interface {
 	CreateStack(context.Context, model.User) (int64, error)
 	AddStackToUser(context.Context, *model.TelegramUser) error
 	SetCurrentStack(ctx context.Context, user *model.TelegramUser) (err error)
-	GetCurrentStack(ctx context.Context, user *model.TelegramUser) (stackID int64, err error)
+	GetCurrentStackID(ctx context.Context, user model.User) (stackID int64, err error)
 	AddEntry(context.Context, model.User) (int64, error)
 	UpdateEntryField(context.Context, int64, EntryField, string) error
 	GetUserStacks(context.Context, model.User) ([]model.StackInfo, error)
@@ -97,8 +97,18 @@ const (
 	// ================ DML ================
 
 	queryGetStackRecords = `
-		SELECT * FROM entries --TODO UPDATE *
-					WHERE stack_id=?`
+		SELECT 
+		    e.id
+		    ,e.stack_id
+			,e.title
+			,e.type
+			,e.current_season
+			,e.current_episode
+			,er.rating    
+		FROM entries e
+		LEFT JOIN entry_ratings er 
+		ON e.id = er.entry_id
+		WHERE stack_id=?`
 	queryGetStackById = `
 		SELECT 
 		    id
@@ -182,7 +192,7 @@ const (
 		UPDATE users
 		SET recent_media = ?
 		WHERE telegram_id = ?`
-	queryUpdateEntryField = "UPDATE" + `entries SET %s=? WHERE id=?`
+	queryUpdateEntryField = "UPDATE" + ` entries SET %s=? WHERE id=?`
 )
 
 type EntryField string
@@ -328,12 +338,16 @@ func (s *SqliteStorage) SetCurrentStack(ctx context.Context, user *model.Telegra
 	)
 	return
 }
-func (s *SqliteStorage) GetCurrentStack(ctx context.Context, user *model.TelegramUser) (stackID int64, err error) {
+func (s *SqliteStorage) GetCurrentStackID(ctx context.Context, user model.User) (stackID int64, err error) {
 	executor := s.GetExecutor(ctx)
+	uid := user.GetTelegramID()
+	if uid == 0 {
+		return 0, errors.New("no user found")
+	}
 	err = executor.QueryRowContext(
 		ctx,
 		queryGetCurrentUserStack,
-		user.User.ID,
+		uid,
 	).Scan(&stackID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -345,14 +359,18 @@ func (s *SqliteStorage) GetCurrentStack(ctx context.Context, user *model.Telegra
 }
 func (s *SqliteStorage) AddEntry(ctx context.Context, user model.User) (entryID int64, err error) {
 	foo := user.GetPayload()
+	userStackID, err := s.GetCurrentStackID(ctx, user)
+	if err != nil {
+		return 0, fmt.Errorf("user stack id is zero")
+	}
 	res, err := s.db.ExecContext(
 		ctx,
 		queryAddRecord,
-		user.GetCurrentStackID(),
+		userStackID,
 		foo,
 		"—",
 		0,
-		0, //foo.RecStatus, //TODO update status
+		0,
 	)
 	if err != nil {
 		return 0, err
@@ -497,9 +515,6 @@ func (s *SqliteStorage) GetStackByID(ctx context.Context, stackID int64) (*model
 func (s *SqliteStorage) GetStackRecords(ctx context.Context, stackID int64) ([]model.Entry, error) {
 	rows, err := s.db.QueryContext(ctx, queryGetStackRecords, stackID)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil
-		}
 		return nil, err
 	}
 	defer func(rows *sql.Rows) {
@@ -511,17 +526,27 @@ func (s *SqliteStorage) GetStackRecords(ctx context.Context, stackID int64) ([]m
 
 	var entries []model.Entry
 	for rows.Next() {
-		var e model.Entry
+		var (
+			e       model.Entry
+			season  sql.NullInt64
+			episode sql.NullInt64
+			rating  model.RawRating
+		)
 		if err := rows.Scan(
 			&e.Id,
 			&e.StackId,
 			&e.Title,
 			&e.Type,
-			&e.Status,
-			&e.Created,
-			&e.Updated,
+			&season,
+			&episode,
+			&rating,
 		); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("scan entry: %w", err)
+		}
+		e.Status = model.Status{
+			Season:          season.Int64,
+			LastEpisodeSeen: episode.Int64,
+			Rating:          rating.PrepareRating(),
 		}
 		entries = append(entries, e)
 	}

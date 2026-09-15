@@ -27,7 +27,7 @@ var (
 )
 
 type StateStrategy func(ctx *th.Context, update telego.Update) error
-type RespondFuncSend func(*model.EventContext) *telego.SendMessageParams
+type RespondFuncSend func(*model.EventContext, ...UserInputPrompt) *telego.SendMessageParams
 type RespondFuncEdit func(*model.EventContext) *telego.EditMessageTextParams
 type APIBotHandler struct {
 	teleBot   *telego.Bot
@@ -39,6 +39,8 @@ type APIBotHandler struct {
 }
 
 func (h *APIBotHandler) StartBot(r *Responder) {
+	h.responder = *r
+
 	h.sr = map[State]StateStrategy{
 		StateNone:                     h.stateNone,
 		StateWaitForNewStackName:      h.newStackInput,
@@ -47,9 +49,14 @@ func (h *APIBotHandler) StartBot(r *Responder) {
 			db.EntryTitleField,
 			h.responder.RespondToFieldUpdate,
 			StateWaitForNewEntryType,
+			newEntryInstructionsType,
+		),
+		StateWaitForNewEntryType: h.recordModification(
+			db.EntryTypeField,
+			h.responder.RespondToFieldUpdate,
+			StateNone,
 		),
 	}
-	h.responder = *r
 
 	ctx, cancel := signal.NotifyContext(
 		context.Background(),
@@ -74,7 +81,26 @@ func (h *APIBotHandler) StartBot(r *Responder) {
 	// ====================== HANDLERS REGISTRATION ========================
 	// =====================================================================
 
-	//bh.Group()
+	// MIDDLEWARE to delete any inline keyboard from the message
+	bh.Use(func(ctx *th.Context, update telego.Update) error {
+		if update.CallbackQuery != nil && update.CallbackQuery.Message != nil {
+			msg := update.CallbackQuery.Message
+			chatID := msg.GetChat().ChatID()
+			msgID := msg.GetMessageID()
+
+			_, editErr := h.teleBot.EditMessageReplyMarkup(ctx, &telego.EditMessageReplyMarkupParams{
+				ChatID:      chatID,
+				MessageID:   msgID,
+				ReplyMarkup: nil,
+			})
+
+			if editErr != nil {
+				// Log error but consider continuing so you don't break the bot flow
+				fmt.Printf("Failed to delete keyboard: %v\n", editErr)
+			}
+		}
+		return ctx.Next(update)
+	})
 	// START
 	bh.Handle(h.startCmd(), th.CommandEqual("start"))
 
@@ -102,7 +128,13 @@ func (h *APIBotHandler) StartBot(r *Responder) {
 		th.CallbackDataEqual("stack:join-stack"),
 	)
 	bh.HandleCallbackQuery(h.stackView(), th.CallbackDataPrefix("stack:view:"))
+	bh.HandleCallbackQuery(h.stackView(), th.CallbackDataEqual("stack:current"))
 
+	// 			— ENTRIES
+	bh.HandleCallbackQuery(
+		h.callbackWithState(StateWaitForNewEntryTitle, h.responder.RespondToNewEntryCallback),
+		th.CallbackDataPrefix("entry:add:"),
+	)
 	// TECHNICAL
 	bh.HandleCallbackQuery(h.cancellation(), th.CallbackDataEqual("action:deny"))
 
@@ -169,20 +201,12 @@ func (h *APIBotHandler) stackSettingsMenu() th.CallbackQueryHandler {
 func (h *APIBotHandler) stackView() th.CallbackQueryHandler {
 	return func(ctx *th.Context, callback telego.CallbackQuery) error {
 		ev := model.ExtractEventFromCallback(&callback)
-		stackID, err := strconv.ParseInt(
-			strings.TrimPrefix(callback.Data, "stack:view:"),
-			10,
-			64,
-		)
+		stackID, err := getInfoFromCallbackData[int64]("stack:view:", callback.Data)
 		if err != nil {
-			h.log.permErrorHandle(
-				Error,
-				InvalidStackIDLog,
-				stackID,
-				ev.User.ID,
-				err,
-			)
-			return err
+			stackID, err = h.getCurrStackIDFromFSMorDB(ctx, ev)
+			if err != nil {
+				return err
+			}
 		}
 
 		defer func() {
@@ -197,22 +221,22 @@ func (h *APIBotHandler) stackView() th.CallbackQueryHandler {
 
 		stackInfo, err := h.bot.GetStackInfo(ctx, stackID)
 		if err != nil {
-			msg := h.responder.RespondWithError(ev, SystemError)
+			msg := h.responder.RespondWithError(ev, CannotGetStackInfo)
 			_, err = h.teleBot.SendMessage(ctx, msg)
 			return err
 		}
 
 		err = h.bot.SelectUserStack(ctx, ev.User, stackInfo.ID)
 		if err != nil {
-			msg := h.responder.RespondWithError(ev, SystemError)
+			msg := h.responder.RespondWithError(ev, CannotSelectUserStack)
 			_, err = h.teleBot.SendMessage(ctx, msg)
 			return err
 		}
 
 		entries, err := h.bot.GetCurrentStackEntries(ctx, ev.User)
 		if err != nil {
-			msg := h.responder.RespondWithError(ev, SystemError)
-			_, err = h.teleBot.SendMessage(ctx, msg)
+			msg := h.responder.RespondWithError(ev, CannotGetStackEntries)
+			_, _ = h.teleBot.SendMessage(ctx, msg)
 			return err
 		}
 		if len(entries) == 0 || entries == nil {
@@ -235,6 +259,8 @@ func (h *APIBotHandler) cancellation() th.CallbackQueryHandler {
 	return func(ctx *th.Context, callback telego.CallbackQuery) error {
 		ev := model.ExtractEventFromCallback(&callback)
 		h.fsm.CleanState(ev.UserID)
+		h.fsm.CleanStack(ev.UserID) //TODO needed?
+		h.fsm.CleanEntry(ev.UserID) //TODO needed?
 
 		err := h.teleBot.AnswerCallbackQuery(
 			ctx.Context(),
@@ -251,25 +277,42 @@ func (h *APIBotHandler) cancellation() th.CallbackQueryHandler {
 	}
 }
 
-// recordModification callback menu:record:new:stackID && State
-func (h *APIBotHandler) recordModification(field db.EntryField, fn RespondFuncSend, nextState State) StateStrategy {
+// recordModification callback menu:record:new:stackID && States
+func (h *APIBotHandler) recordModification(
+	field db.EntryField,
+	fn RespondFuncSend,
+	nextState State,
+	nextPrompt ...UserInputPrompt,
+) StateStrategy {
 	return func(ctx *th.Context, update telego.Update) error {
 		ev := model.ExtractEvent(update)
-		h.fsm.SetState(ev.UserID, nextState, PendingProlonged)
+
 		entry, exists := h.fsm.GetEntry(ev.UserID)
 		if !exists {
-			msg := h.responder.RespondWithError(ev, SystemError)
-			_, _ = h.teleBot.SendMessage(ctx, msg)
-			return fmt.Errorf("no entry found in fsm")
+			if h.fsm.GetState(ev.UserID) != StateWaitForNewEntryTitle {
+				msg := h.responder.RespondWithError(ev, SystemError)
+				_, _ = h.teleBot.SendMessage(ctx, msg)
+				return fmt.Errorf("no entry found in fsm")
+			}
+			entry, err := h.bot.AddNewEntry(ctx, ev.User, update.Message.Text)
+			if err != nil {
+				msg := h.responder.RespondWithError(ev, SystemError)
+				_, _ = h.teleBot.SendMessage(ctx, msg)
+				return fmt.Errorf("unknown error on creating entry: %w", err)
+			}
+			h.fsm.SetEntry(ev.UserID, entry, PendingProlonged)
+		} else {
+			err := h.bot.UpdateEntry(ctx, entry, field, update.Message.Text)
+			if err != nil {
+				msg := h.responder.RespondWithError(ev, UpdError, InvalidInput)
+				_, _ = h.teleBot.SendMessage(ctx, msg)
+				return err
+			}
 		}
-		err := h.bot.UpdateEntry(ctx, entry, field, update.Message.Text) //TODO define how to retrieve an entry id (with fsm?)
-		if err != nil {
-			msg := h.responder.RespondWithError(ev, SystemError)
-			_, _ = h.teleBot.SendMessage(ctx, msg)
-			return err
-		}
-		msg := fn(ev)
-		_, err = h.teleBot.SendMessage(ctx, msg)
+
+		msg := fn(ev, nextPrompt...)
+		_, err := h.teleBot.SendMessage(ctx, msg)
+		h.fsm.SetState(ev.UserID, nextState, PendingProlonged)
 		return err
 	}
 }
@@ -367,6 +410,46 @@ func (h *APIBotHandler) callbackWithState(state State, respondFn RespondFuncEdit
 		_, err = h.teleBot.EditMessageText(ctx.Context(), editedMsg)
 		return err
 	}
+}
+
+func getInfoFromCallbackData[T any](prefix string, cbd string) (T, error) {
+	payload := strings.TrimPrefix(cbd, prefix)
+
+	var result T
+
+	switch ptr := any(&result).(type) {
+	case *string:
+		*ptr = payload
+	case *int64:
+		i, err := strconv.ParseInt(payload, 10, 64)
+		if err != nil {
+			return result, err
+		}
+		*ptr = i
+	default:
+		panic(fmt.Sprintf("unsupported type: %T", result))
+	}
+
+	return result, nil
+}
+
+func (h *APIBotHandler) getCurrStackIDFromFSMorDB(ctx context.Context, ev *model.EventContext) (int64, error) {
+	stackID, exists := h.fsm.GetStack(ev.UserID)
+	if !exists {
+		var err error
+		stackID, err = h.bot.GetSelectedUserStackID(ctx, ev.User)
+		if err != nil {
+			h.log.permErrorHandle(
+				Error,
+				InvalidStackIDLog,
+				stackID,
+				ev.User.ID,
+				err,
+			)
+			return 0, err
+		}
+	}
+	return stackID, nil
 }
 
 func NewAPIBotHandler(l Logger, bot BotService) *APIBotHandler {

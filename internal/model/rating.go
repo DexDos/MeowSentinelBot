@@ -1,5 +1,7 @@
 package model
 
+import "fmt"
+
 type Score int
 
 const (
@@ -35,4 +37,34 @@ func (r Rating) String() string {
 	default:
 		return "?"
 	}
+}
+
+// RawRating is a helper struct to safely extract Rating via PrepareRating() func
+type RawRating struct {
+	ScoreValue Score
+}
+
+func (r *RawRating) Scan(value any) error {
+	if value == nil {
+		r.ScoreValue = NotSeen
+		return nil
+	}
+
+	switch v := value.(type) {
+	case int64:
+		r.ScoreValue = Score(v)
+	case []byte:
+		var score int
+		if _, err := fmt.Sscanf(string(v), "%d", &score); err != nil {
+			return fmt.Errorf("failed to scan Rating: %w", err)
+		}
+		r.ScoreValue = Score(score)
+	default:
+		return fmt.Errorf("unsupported type for Rating: %T", value)
+	}
+	return nil
+}
+
+func (r *RawRating) PrepareRating() Rating {
+	return Rating{r.ScoreValue}
 }

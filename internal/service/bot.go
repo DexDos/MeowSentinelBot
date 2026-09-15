@@ -13,23 +13,33 @@ import (
 
 type BotService interface {
 	GetTelegramBot() *telego.Bot
-	AddNewUser(context.Context, *telego.User) error
-	GetUserByID(context.Context, int64) bool
-	CreateNewUserStack(context.Context, *telego.User, string) error
-	JoinUserStack(context.Context, *telego.User, int64) error
-	GetOwnedStacks(context.Context, *telego.User) ([]model.StackInfo, error)
-	GetUserStacks(context.Context, *telego.User) ([]model.StackInfo, error)
-	GetStackInfo(context.Context, int64) (*model.StackInfo, error)
-	SelectUserStack(context.Context, *telego.User, int64) error
-	GetCurrentStackEntries(context.Context, *telego.User) ([]model.Entry, error)
-	AddNewEntry(context.Context, *telego.User, string) (int64, error)
-	UpdateEntry(context.Context, int64, db.EntryField, string) error
+	AddNewUser(ctx context.Context, tUser *telego.User) error
+	GetUserByID(ctx context.Context, uid int64) bool
+	CreateNewUserStack(ctx context.Context, tUser *telego.User, title string) error
+	JoinUserStack(ctx context.Context, tUser *telego.User, stackID int64) error
+	GetOwnedStacks(ctx context.Context, tUser *telego.User) ([]model.StackInfo, error)
+	GetUserStacks(ctx context.Context, tUser *telego.User) ([]model.StackInfo, error)
+	GetStackInfo(ctx context.Context, stackID int64) (*model.StackInfo, error)
+	SelectUserStack(ctx context.Context, tUser *telego.User, stackID int64) error
+	GetSelectedUserStackID(ctx context.Context, tUser *telego.User) (int64, error)
+	GetCurrentStackEntries(ctx context.Context, tUser *telego.User) ([]model.Entry, error)
+	AddNewEntry(ctx context.Context, tUser *telego.User, title string) (int64, error)
+	UpdateEntry(ctx context.Context, entryID int64, field db.EntryField, payload string) error
 }
 
 type BotServiceStd struct {
 	Bot    *telego.Bot
 	db     db.Storage
 	logger Logger
+}
+
+func (s *BotServiceStd) GetSelectedUserStackID(ctx context.Context, tUser *telego.User) (int64, error) {
+	u := model.NewTelegramUser(tUser, "")
+	stackID, err := s.db.GetCurrentStackID(ctx, u)
+	if err != nil {
+		return 0, fmt.Errorf("error on getting current user stack id: %w", err)
+	}
+	return stackID, nil
 }
 
 func (s *BotServiceStd) GetStackInfo(ctx context.Context, stackID int64) (*model.StackInfo, error) {
@@ -117,7 +127,7 @@ func (s *BotServiceStd) SelectUserStack(ctx context.Context, tUser *telego.User,
 
 func (s *BotServiceStd) GetCurrentStackEntries(ctx context.Context, tUser *telego.User) ([]model.Entry, error) {
 	u := model.NewTelegramUser(tUser, "")
-	stackID, err := s.db.GetCurrentStack(ctx, u)
+	stackID, err := s.db.GetCurrentStackID(ctx, u)
 	if stackID == 0 {
 		if err != nil {
 			return nil, fmt.Errorf("error on fetching current stack ID: %w", err)

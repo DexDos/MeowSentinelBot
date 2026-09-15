@@ -15,7 +15,7 @@ type Entry struct {
 	Updated time.Time
 }
 
-func (e *Entry) String() string {
+func (e Entry) String() string {
 	return fmt.Sprintf(
 		"[%d]**%s**: %v\n",
 		e.Id,
@@ -25,12 +25,12 @@ func (e *Entry) String() string {
 }
 
 type Status struct {
-	Season          int16
-	LastEpisodeSeen int16
+	Season          int64
+	LastEpisodeSeen int64
 	Rating          Rating
 }
 
-func (s *Status) String() string {
+func (s Status) String() string {
 	return fmt.Sprintf(
 		"( %d | %d ) :: %v",
 		s.Season,

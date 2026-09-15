@@ -20,5 +20,4 @@ func main() {
 	responder = service.NewStdResponder()
 
 	handler.StartBot(&responder)
-
 }
