@@ -129,10 +129,10 @@ const (
 		WHERE us.user_id=?`
 	queryGetUserByID = `
 		SELECT
-			telegram_id,
-			recent_media,
-			created_at,
-			updated_at
+			telegram_id
+			,recent_media
+			,created_at
+			,updated_at
 		FROM users 
 		WHERE telegram_id=?`
 	queryGetCurrentUserStack = `
@@ -149,11 +149,11 @@ const (
 		VALUES(?,?)`
 	queryAddRecord = `
 		INSERT INTO entries(
-		                    stack_id, 
-		                    title, 
-		                    type, 
-		                    current_season, 
-		                    current_episode)
+		                    stack_id
+		                    ,title
+		                    ,type
+		                    ,current_season
+		                    ,current_episode)
 		VALUES(?,?,?,?,?)`
 	queryAddStackToUser = `
 		INSERT INTO user_stacks(user_id, stack_id)
