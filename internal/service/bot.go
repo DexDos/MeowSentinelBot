@@ -7,6 +7,7 @@ import (
 	"MeowSentinelBot/internal/utils"
 	"context"
 	"fmt"
+	"strconv"
 
 	"github.com/mymmrac/telego"
 )
@@ -24,13 +25,31 @@ type BotService interface {
 	GetSelectedUserStackID(ctx context.Context, tUser *telego.User) (int64, error)
 	GetCurrentStackEntries(ctx context.Context, tUser *telego.User) ([]model.Entry, error)
 	AddNewEntry(ctx context.Context, tUser *telego.User, title string) (int64, error)
+	GetEntryByID(ctx context.Context, entryID int64) (*model.Entry, error)
 	UpdateEntry(ctx context.Context, entryID int64, field db.EntryField, payload string) error
+	DefineAndPerformChange(ctx context.Context, userID, entryID int64, field db.EntryField, rawModValue int64) (*model.Entry, error)
 }
+
+type InlineEntryUpdateFn func(ctx context.Context, userID, entryID int64, field db.EntryField, payload int64) (*model.Entry, error)
 
 type BotServiceStd struct {
 	Bot    *telego.Bot
 	db     db.Storage
 	logger Logger
+}
+
+func (s *BotServiceStd) GetEntryByID(ctx context.Context, entryID int64) (*model.Entry, error) {
+	if entryID <= 0 {
+		return nil, fmt.Errorf("invalid entry id")
+	}
+	entry, err := s.db.GetEntryByID(ctx, entryID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get entry by id %d: %w", entryID, err)
+	}
+	if entry == nil {
+		return nil, fmt.Errorf("entry not found")
+	}
+	return entry, nil
 }
 
 func (s *BotServiceStd) GetSelectedUserStackID(ctx context.Context, tUser *telego.User) (int64, error) {
@@ -150,11 +169,74 @@ func (s *BotServiceStd) AddNewEntry(ctx context.Context, tUser *telego.User, pay
 	return entryID, nil
 }
 func (s *BotServiceStd) UpdateEntry(ctx context.Context, entryID int64, field db.EntryField, payload string) error {
+	if field == db.EntryRatingField {
+		panic("implement me")
+		//TODO make the respective behaviour
+	}
+
 	err := s.db.UpdateEntryField(ctx, entryID, field, payload)
 	if err != nil {
 		return fmt.Errorf("error on updating entry: %w", err)
 	}
 	return nil
+}
+
+func (s *BotServiceStd) DefineAndPerformChange(ctx context.Context, userID, entryID int64, field db.EntryField, rawModValue int64) (*model.Entry, error) {
+	entry, err := s.GetEntryByID(ctx, entryID)
+	if err != nil {
+		return nil, fmt.Errorf("error on getting entry: %w", err)
+	}
+
+	switch field {
+	case db.EntryCurrentSeasonField:
+		return s.InlineSeasonScroll(ctx, entry, rawModValue)
+	case db.EntryCurrentEpisodeField:
+		return s.InlineEpisodeScroll(ctx, entry, rawModValue)
+	case db.EntryRatingField:
+		return s.InlineRate(ctx, entry, userID, rawModValue)
+	default:
+		return nil, fmt.Errorf("invalid entry field")
+	}
+}
+func (s *BotServiceStd) InlineRate(ctx context.Context, entry *model.Entry, userID, payload int64) (*model.Entry, error) {
+	score := model.Rating{}.SetScore(payload)
+
+	err := s.db.RateEntry(ctx, userID, entry.Id, score)
+	if err != nil {
+		return nil, fmt.Errorf("error on inline rate: %w", err)
+	}
+
+	updatedEntry, err := s.GetEntryByID(ctx, entry.Id)
+	if err != nil {
+		return nil, fmt.Errorf("error on updating entry: %w", err)
+	}
+	return updatedEntry, nil
+}
+func (s *BotServiceStd) InlineSeasonScroll(ctx context.Context, entry *model.Entry, payload int64) (*model.Entry, error) {
+	updatedSeason := entry.Status.Season + payload
+	str := strconv.Itoa(int(updatedSeason))
+	err := s.db.UpdateEntryField(ctx, entry.Id, db.EntryCurrentSeasonField, str)
+	if err != nil {
+		return nil, fmt.Errorf("error on inline season scroll: %w", err)
+	}
+	updatedEntry, err := s.GetEntryByID(ctx, entry.Id)
+	if err != nil {
+		return nil, fmt.Errorf("error on updating entry: %w", err)
+	}
+	return updatedEntry, nil
+}
+func (s *BotServiceStd) InlineEpisodeScroll(ctx context.Context, entry *model.Entry, payload int64) (*model.Entry, error) {
+	updatedEpisode := entry.Status.LastEpisodeSeen + payload
+	str := strconv.Itoa(int(updatedEpisode))
+	err := s.db.UpdateEntryField(ctx, entry.Id, db.EntryCurrentEpisodeField, str)
+	if err != nil {
+		return nil, fmt.Errorf("error on inline season scroll: %w", err)
+	}
+	updatedEntry, err := s.GetEntryByID(ctx, entry.Id)
+	if err != nil {
+		return nil, fmt.Errorf("error on updating entry: %w", err)
+	}
+	return updatedEntry, nil
 }
 
 func NewBotServiceStd(logger Logger, cfg *config.Bot) *BotServiceStd {

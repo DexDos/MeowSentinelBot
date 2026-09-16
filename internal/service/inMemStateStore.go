@@ -13,7 +13,15 @@ const (
 	StateWaitForNewStackName
 	StateWaitForExistingStackName
 	StateWaitForNewEntryTitle
+	StateWaitForEntryTitleUpdate
 	StateWaitForNewEntryType
+	StateWaitForEntryTypeUpdate
+	StateWaitForNewEntrySeason
+	StateWaitForEntrySeasonUpdate
+	StateWaitForNewEntryEpisode
+	StateWaitForEntryEpisodeUpdate
+	StateWaitForEntryID
+	StateWaitForDeletionEntryID
 	StateWaitForSeasonReplenishment
 	StateWaitForEpisodeReplenishment
 	StateWaitForConfirmation

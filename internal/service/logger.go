@@ -74,6 +74,10 @@ func (t Severity) String() string {
 		return "LIFECYCLE"
 	case Debug:
 		return "DEBUG"
+	case Fatal:
+		return "FATAL"
+	case Attack:
+		return "ATTACK"
 	default:
 		return "UNKNOWN"
 	}
@@ -86,11 +90,13 @@ const (
 	Info
 	LifeCycle
 	Debug
+	Attack
 )
 
 type LogErrorText string
 
 const (
+	PossibleAttack           LogErrorText = "Attack may have been detected. TID: [%d] | Suspicious payload: [%v]"
 	BotStart                 LogErrorText = "Bot is starting"
 	BotStop                  LogErrorText = "Bot is stopped"
 	PanicLog                 LogErrorText = "error due to %v"
@@ -99,4 +105,5 @@ const (
 	MessageSendingFailureLog LogErrorText = "failed to send message to id[%v] %v due to %v"
 	CreatingDBErrorLog       LogErrorText = "error creating db service: %v"
 	DBErrorLog               LogErrorText = "error while db running: %v"
+	UnknownError             LogErrorText = "unknown error: TID[%d] | Payload [%v] | Error [%v]"
 )

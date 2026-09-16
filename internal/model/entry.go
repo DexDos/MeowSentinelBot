@@ -38,3 +38,12 @@ func (s Status) String() string {
 		s.Rating,
 	)
 }
+
+func (s Status) EnhancedString() string {
+	return fmt.Sprintf(
+		"rating: %6v\n\nHave watched:\nseason:%5d \nepisode:%3d",
+		s.Rating,
+		s.Season,
+		s.LastEpisodeSeen,
+	)
+}

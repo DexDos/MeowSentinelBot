@@ -2,6 +2,7 @@ package service
 
 import (
 	"MeowSentinelBot/internal/model"
+	"MeowSentinelBot/internal/utils/cbUtils"
 	"MeowSentinelBot/internal/utils/stackUtils"
 	"fmt"
 	"strings"
@@ -20,76 +21,33 @@ type Responder interface {
 	RespondToStart(ev *model.EventContext) *telego.SendMessageParams
 	RespondToNewStackCmdCallback(ev *model.EventContext) *telego.EditMessageTextParams
 	RespondToJoinStackCmdCallback(ev *model.EventContext) *telego.EditMessageTextParams
-	RespondWithNewEntryRecordMenu(ev *model.EventContext, si *model.StackInfo) *telego.EditMessageTextParams
+	RespondWithNewEntryUpdateMenu(ev *model.EventContext, si *model.StackInfo) *telego.EditMessageTextParams
 	RespondWithStackIsEmpty(ev *model.EventContext, si *model.StackInfo) *telego.EditMessageTextParams
 	RespondToFieldUpdate(ev *model.EventContext, prompt ...UserInputPrompt) *telego.SendMessageParams
 	RespondToNewEntryCallback(ev *model.EventContext) *telego.EditMessageTextParams
+	RespondToEntryUpdateCallback(ev *model.EventContext) *telego.EditMessageTextParams
+	RespondWithSelectedEntryMenu(ev *model.EventContext, entry *model.Entry) *telego.SendMessageParams
+	RespondWithSelectedEntryMenuEdited(ev *model.EventContext, entry *model.Entry) *telego.EditMessageTextParams
+	RespondWithSelEntryRatingMenu(ev *model.EventContext) *telego.EditMessageTextParams
+	RespondWithSelectedEntryDeletionMenu(ev *model.EventContext, entry *model.Entry) *telego.SendMessageParams
 }
 
+type RespondFuncSend func(*model.EventContext, ...UserInputPrompt) *telego.SendMessageParams
+type RespondFuncEdit func(ev *model.EventContext) *telego.EditMessageTextParams
+type RespondFuncEntry func(ev *model.EventContext, entry *model.Entry) *telego.SendMessageParams
+type RespondFuncEditEntry func(ev *model.EventContext, entry *model.Entry) *telego.EditMessageTextParams
 type StdResponder struct {
+}
+
+func (r StdResponder) RespondWithSelectedEntryMenuEdited(ev *model.EventContext, entry *model.Entry) *telego.EditMessageTextParams {
+	msg := r.RespondWithSelectedEntryMenu(ev, entry)
+	editMsg := cbUtils.ToEditParams(msg, ev.MessageID)
+	return editMsg
 }
 
 func (r StdResponder) RespondWithCurrentStackMenu(ev *model.EventContext, stacks []model.StackInfo) *telego.SendMessageParams {
 	//TODO implement me
 	panic("implement me")
-}
-
-func (r StdResponder) RespondWithCurrentStackView(ev *model.EventContext, stack model.Stack) *telego.EditMessageTextParams {
-	typedEntries := stackUtils.SortStack(stack.Entries)
-	sb := strings.Builder{}
-	sb.WriteString(fmt.Sprintf(
-		string(stackFmt),
-		stack.Info.Title,
-	))
-	for _, t := range typedEntries {
-		sb.WriteString(fmt.Sprintf(
-			string(typeFmt),
-			t[0].Type,
-		))
-		for _, e := range t {
-			sb.WriteString(fmt.Sprint(e))
-		}
-		sb.WriteString("\n")
-	}
-	sb.WriteString(fmt.Sprintf(
-		"Last updated at %s",
-		stack.Info.Updated.Format(string(timeShortFmt)),
-	))
-
-	msgTxt := sb.String()
-
-	keyboard := tu.InlineKeyboard(
-		tu.InlineKeyboardRow(
-			tu.InlineKeyboardButton("✨ Add").WithCallbackData(
-				fmt.Sprintf("entry:add:%d", stack.Info.ID),
-			),
-			tu.InlineKeyboardButton("👀 Update").WithCallbackData(
-				fmt.Sprintf("stack:update:%d", stack.Info.ID),
-			),
-			tu.InlineKeyboardButton("🗑 Delete").WithCallbackData(
-				fmt.Sprintf("stack:delete:%d", stack.Info.ID),
-			),
-		),
-		tu.InlineKeyboardRow(
-			tu.InlineKeyboardButton("🔍 Search").WithCallbackData(
-				fmt.Sprintf("stack:search:%d", stack.Info.ID),
-			),
-			tu.InlineKeyboardButton("📒 Filter").WithCallbackData(
-				fmt.Sprintf("stack:filter:%d", stack.Info.ID),
-			),
-		),
-		tu.InlineKeyboardRow(
-			tu.InlineKeyboardButton("❌ Exit stack").WithCallbackData("menu:main"),
-		),
-	)
-
-	msg := tu.EditMessageText(
-		ev.ChatID,
-		ev.MessageID,
-		msgTxt,
-	).WithParseMode(telego.ModeMarkdown).WithReplyMarkup(keyboard)
-
-	return msg
 }
 
 func (r StdResponder) RespondToNewStackCmdCallback(ev *model.EventContext) *telego.EditMessageTextParams {
@@ -176,16 +134,6 @@ func (r StdResponder) RespondToFieldUpdate(ev *model.EventContext, newInputPromp
 	return msg
 }
 
-func (r StdResponder) RespondToNewEntryCallback(ev *model.EventContext) *telego.EditMessageTextParams {
-	prompt := string(newEntryInstructionsTitle)
-	keyboard := tu.InlineKeyboard(tu.InlineKeyboardRow(
-		tu.InlineKeyboardButton("Cancel").WithCallbackData("action:deny"),
-	))
-
-	msg := tu.EditMessageText(ev.ChatID, ev.MessageID, prompt).
-		WithReplyMarkup(keyboard).WithParseMode(telego.ModeMarkdown)
-	return msg
-}
 func (r StdResponder) RespondWithStackIsEmpty(ev *model.EventContext, si *model.StackInfo) *telego.EditMessageTextParams {
 	prompt := string(stackIsEmpty + newEntryInstructionsTitle)
 
@@ -197,8 +145,137 @@ func (r StdResponder) RespondWithStackIsEmpty(ev *model.EventContext, si *model.
 		WithReplyMarkup(keyboard).WithParseMode(telego.ModeMarkdown)
 	return msg
 }
+func (r StdResponder) RespondWithCurrentStackView(ev *model.EventContext, stack model.Stack) *telego.EditMessageTextParams {
+	typedEntries := stackUtils.SortStack(stack.Entries)
+	sb := strings.Builder{}
+	sb.WriteString(fmt.Sprintf(
+		string(stackFmt),
+		stack.Info.Title,
+	))
+	for _, t := range typedEntries {
+		sb.WriteString(fmt.Sprintf(
+			string(typeFmt),
+			t[0].Type,
+		))
+		for _, e := range t {
+			sb.WriteString(fmt.Sprint(e))
+		}
+		sb.WriteString("\n")
+	}
+	sb.WriteString(fmt.Sprintf(
+		"Last updated at %s",
+		stack.Info.Updated.Format(string(timeShortFmt)),
+	))
 
-func (r StdResponder) RespondWithNewEntryRecordMenu(ev *model.EventContext, si *model.StackInfo) *telego.EditMessageTextParams {
+	msgTxt := sb.String()
+
+	keyboard := tu.InlineKeyboard(
+		tu.InlineKeyboardRow(
+			tu.InlineKeyboardButton("✨ Add").WithCallbackData(
+				fmt.Sprintf("entry:add:%d", stack.Info.ID),
+			),
+			tu.InlineKeyboardButton("👀 Update").WithCallbackData(
+				fmt.Sprintf("entry:update:%d", stack.Info.ID),
+			),
+			tu.InlineKeyboardButton("🗑 Delete").WithCallbackData(
+				fmt.Sprintf("entry:delete:%d", stack.Info.ID),
+			),
+		),
+		tu.InlineKeyboardRow(
+			tu.InlineKeyboardButton("🔍 Search").WithCallbackData(
+				fmt.Sprintf("stack:search:%d", stack.Info.ID),
+			),
+			tu.InlineKeyboardButton("📒 Filter").WithCallbackData(
+				fmt.Sprintf("stack:filter:%d", stack.Info.ID),
+			),
+		),
+		tu.InlineKeyboardRow(
+			tu.InlineKeyboardButton("❌ Exit stack").WithCallbackData("menu:main"),
+		),
+	)
+
+	msg := tu.EditMessageText(
+		ev.ChatID,
+		ev.MessageID,
+		msgTxt,
+	).WithParseMode(telego.ModeMarkdown).WithReplyMarkup(keyboard)
+
+	return msg
+}
+
+func (r StdResponder) RespondToNewEntryCallback(ev *model.EventContext) *telego.EditMessageTextParams {
+	prompt := string(newEntryInstructionsTitle)
+	keyboard := tu.InlineKeyboard(tu.InlineKeyboardRow(
+		tu.InlineKeyboardButton("Cancel").WithCallbackData("action:deny"),
+	))
+
+	msg := tu.EditMessageText(ev.ChatID, ev.MessageID, prompt).
+		WithReplyMarkup(keyboard).WithParseMode(telego.ModeMarkdown)
+	return msg
+}
+func (r StdResponder) RespondToEntryUpdateCallback(ev *model.EventContext) *telego.EditMessageTextParams {
+	prompt := string(entryIDInputPrompt)
+	keyboard := tu.InlineKeyboard(tu.InlineKeyboardRow(
+		tu.InlineKeyboardButton("Cancel").WithCallbackData("action:deny"),
+	))
+
+	msg := tu.EditMessageText(ev.ChatID, ev.MessageID, prompt).
+		WithParseMode(telego.ModeMarkdown).WithReplyMarkup(keyboard)
+	return msg
+}
+func (r StdResponder) RespondToEntryFieldChangeCallback(ev *model.EventContext) *telego.EditMessageTextParams {
+	panic("implement me")
+}
+
+func (r StdResponder) RespondWithSelectedEntryMenu(ev *model.EventContext, entry *model.Entry) *telego.SendMessageParams {
+	sb := strings.Builder{}
+	// TODO edit formatting . mb no need in ID
+	sb.WriteString(fmt.Sprintf("id:%5s %d ", "", entry.Id))
+	sb.WriteString("<blockquote>")
+	sb.WriteString(fmt.Sprintf("title:<b>%31v</b>\n", entry.Title))
+	sb.WriteString(fmt.Sprintf("type:<b>%30v</b>\n\n", entry.Type))
+	sb.WriteString(fmt.Sprintf("%v", entry.Status.EnhancedString()))
+	sb.WriteString("</blockquote>")
+	msgText := sb.String()
+
+	keyboard := tu.InlineKeyboard(
+		tu.InlineKeyboardRow(
+			tu.InlineKeyboardButton("⭐️ Rate ⭐️").WithCallbackData(fmt.Sprintf("entry:rate:%d", entry.StackId)),
+		),
+		tu.InlineKeyboardRow(
+			tu.InlineKeyboardButton("⏪").WithCallbackData("entry:scroll:season:-1"),
+			tu.InlineKeyboardButton("◀️").WithCallbackData("entry:scroll:episode:-1"),
+			tu.InlineKeyboardButton("set").WithCallbackData("entry:change:status"),
+			tu.InlineKeyboardButton("▶️").WithCallbackData("entry:scroll:episode:1"),
+			tu.InlineKeyboardButton("⏩").WithCallbackData("entry:scroll:season:1"),
+		),
+		tu.InlineKeyboardRow(
+			tu.InlineKeyboardButton("✍️ title").WithCallbackData("entry:change:title"),
+			tu.InlineKeyboardButton("type ✍️").WithCallbackData("entry:change:type"),
+		),
+		tu.InlineKeyboardRow(
+			tu.InlineKeyboardButton("❌ delete").WithCallbackData(
+				fmt.Sprintf("stack:delete:%d", entry.StackId),
+			),
+			tu.InlineKeyboardButton("back 🗄").WithCallbackData(
+				fmt.Sprintf("stack:view:%d", entry.StackId),
+			),
+		),
+	)
+
+	msg := tu.Message(ev.ChatID, msgText).WithParseMode(telego.ModeHTML).WithReplyMarkup(keyboard)
+
+	return msg
+}
+func (r StdResponder) RespondWithSelEntryRatingMenu(ev *model.EventContext) *telego.EditMessageTextParams {
+
+	panic("implement me")
+}
+func (r StdResponder) RespondWithSelectedEntryDeletionMenu(ev *model.EventContext, entry *model.Entry) *telego.SendMessageParams {
+	panic("implement me")
+}
+
+func (r StdResponder) RespondWithNewEntryUpdateMenu(ev *model.EventContext, si *model.StackInfo) *telego.EditMessageTextParams {
 	panic("implement me")
 }
 
@@ -251,6 +328,7 @@ const (
 	stackIsEmpty              UserInputPrompt = "It seems that your stack is empty at this point 🥺\n\nLet's configure your *first record*!✨\n"
 	newEntryInstructionsTitle UserInputPrompt = "The very first thing you need to specify would be the *record title* (e.g., Game of Thrones). Feel free to use any aliases so that you could distinguish your records later on (GoT).\n\n*Enter the record name*:"
 	newEntryInstructionsType  UserInputPrompt = "The next think you really need is the *record type*.\n\nRecord type — is a custom key you would then be able to filter records by. Think of any type of media (film, series, anime, dorama etc). \n\n*Enter the record type*:"
+	entryIDInputPrompt        UserInputPrompt = "Enter the ID of the record\n\n*Record ID* can be found in front of record name:\n*ID* name ( s | ep ) rating\n*Record ID:*"
 )
 
 type ResponseFormat string
@@ -266,8 +344,11 @@ type ErrorText string
 const (
 	InvalidStackName      ErrorText = "Failed to create stack. Make sure you didn't put any shenanigans as a stack name. "
 	InvalidStackID        ErrorText = "Failed to recognize stackID. Make sure you have a valid stackID. "
+	InvalidEntryID        ErrorText = "Failed to recognize entryID."
 	StackIsEmpty          ErrorText = "Stack is empty."
 	SystemError           ErrorText = "Unknown error."
+	TimeHasExpired        ErrorText = "Time to hold state data has expired. Please, return back to menu and perform same actions."
+	PossibleHackAttempt   ErrorText = "Possible hack attempt detected. Telegram ID is logged. You will get banned"
 	UpdError              ErrorText = "Failed to update the entry. %v."
 	InvalidInput          ErrorText = "Invalid input."
 	CannotGetStackInfo    ErrorText = "Cannot get stack info."

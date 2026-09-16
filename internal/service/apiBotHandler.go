@@ -3,12 +3,12 @@ package service
 import (
 	"MeowSentinelBot/internal/db"
 	"MeowSentinelBot/internal/model"
+	"MeowSentinelBot/internal/utils/peUtils"
 	"context"
 	"fmt"
 	"os"
 	"os/signal"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
@@ -27,8 +27,7 @@ var (
 )
 
 type StateStrategy func(ctx *th.Context, update telego.Update) error
-type RespondFuncSend func(*model.EventContext, ...UserInputPrompt) *telego.SendMessageParams
-type RespondFuncEdit func(*model.EventContext) *telego.EditMessageTextParams
+type InlineEntryChange func(ctx *th.Context, cb telego.CallbackQuery) error
 type APIBotHandler struct {
 	teleBot   *telego.Bot
 	responder Responder
@@ -55,6 +54,14 @@ func (h *APIBotHandler) StartBot(r *Responder) {
 			db.EntryTypeField,
 			h.responder.RespondToFieldUpdate,
 			StateNone,
+		),
+		StateWaitForEntryID: h.recordSelection(
+			h.responder.RespondWithSelectedEntryMenu,
+			StateNone,
+		),
+		StateWaitForDeletionEntryID: h.recordSelection(
+			h.responder.RespondWithSelectedEntryDeletionMenu,
+			StateWaitForConfirmation,
 		),
 	}
 
@@ -135,6 +142,27 @@ func (h *APIBotHandler) StartBot(r *Responder) {
 		h.callbackWithState(StateWaitForNewEntryTitle, h.responder.RespondToNewEntryCallback),
 		th.CallbackDataPrefix("entry:add:"),
 	)
+	bh.HandleCallbackQuery(
+		h.callbackWithState(StateWaitForEntryID, h.responder.RespondToEntryUpdateCallback),
+		th.CallbackDataPrefix("entry:update:"),
+	)
+	bh.HandleCallbackQuery(
+		h.callbackWithState(StateWaitForDeletionEntryID, h.responder.RespondToNewEntryCallback),
+		th.CallbackDataPrefix("entry:delete:"),
+	)
+	bh.HandleCallbackQuery(
+		h.callbackWithState(StateNone, h.responder.RespondWithSelEntryRatingMenu),
+		th.CallbackDataPrefix("entry:rate:"),
+	)
+
+	bh.HandleCallbackQuery(
+		th.CallbackQueryHandler(h.callbackEntryUpdateNoState(
+			"entry:scroll:",
+			h.bot.DefineAndPerformChange,
+			h.responder.RespondWithSelectedEntryMenuEdited,
+		)),
+		th.CallbackDataPrefix("entry:scroll:"),
+	)
 	// TECHNICAL
 	bh.HandleCallbackQuery(h.cancellation(), th.CallbackDataEqual("action:deny"))
 
@@ -201,7 +229,7 @@ func (h *APIBotHandler) stackSettingsMenu() th.CallbackQueryHandler {
 func (h *APIBotHandler) stackView() th.CallbackQueryHandler {
 	return func(ctx *th.Context, callback telego.CallbackQuery) error {
 		ev := model.ExtractEventFromCallback(&callback)
-		stackID, err := getInfoFromCallbackData[int64]("stack:view:", callback.Data)
+		stackID, err := peUtils.GetInfoFromCallbackData[int64]("stack:view:", callback.Data)
 		if err != nil {
 			stackID, err = h.getCurrStackIDFromFSMorDB(ctx, ev)
 			if err != nil {
@@ -277,7 +305,7 @@ func (h *APIBotHandler) cancellation() th.CallbackQueryHandler {
 	}
 }
 
-// recordModification callback menu:record:new:stackID && States
+// recordModification is used to register any changes provided with user input
 func (h *APIBotHandler) recordModification(
 	field db.EntryField,
 	fn RespondFuncSend,
@@ -314,6 +342,37 @@ func (h *APIBotHandler) recordModification(
 		_, err := h.teleBot.SendMessage(ctx, msg)
 		h.fsm.SetState(ev.UserID, nextState, PendingProlonged)
 		return err
+	}
+}
+
+func (h *APIBotHandler) recordSelection(
+	fn RespondFuncEntry,
+	nextState State,
+	nextPrompt ...UserInputPrompt,
+) StateStrategy {
+	return func(ctx *th.Context, update telego.Update) error {
+		ev := model.ExtractEvent(update)
+		rawEID := update.Message.Text
+
+		eID, err := peUtils.GetInfoFromPayload[int64](rawEID)
+		if err != nil {
+			msg := h.responder.RespondWithError(ev, InvalidEntryID)
+			_, _ = h.teleBot.SendMessage(ctx, msg)
+			return err
+		}
+
+		entry, err := h.bot.GetEntryByID(ctx, eID)
+		if err != nil {
+			msg := h.responder.RespondWithError(ev, InvalidEntryID)
+			_, _ = h.teleBot.SendMessage(ctx, msg)
+			return err
+		}
+
+		msg := fn(ev, entry)
+		_, _ = h.teleBot.SendMessage(ctx, msg)
+		h.fsm.SetState(ev.UserID, nextState, PendingProlonged)
+		h.fsm.SetEntry(ev.UserID, entry.Id, PendingProlonged)
+		return nil
 	}
 }
 
@@ -393,6 +452,8 @@ func (h *APIBotHandler) joinStackInput(ctx *th.Context, update telego.Update) er
 	return err
 }
 
+// callbackWithState is used to trigger user input prompting with further (FMS) State-driven
+// user input determination
 func (h *APIBotHandler) callbackWithState(state State, respondFn RespondFuncEdit) th.CallbackQueryHandler {
 	return func(ctx *th.Context, cb telego.CallbackQuery) error {
 		ev := model.ExtractEventFromCallback(&cb)
@@ -412,25 +473,54 @@ func (h *APIBotHandler) callbackWithState(state State, respondFn RespondFuncEdit
 	}
 }
 
-func getInfoFromCallbackData[T any](prefix string, cbd string) (T, error) {
-	payload := strings.TrimPrefix(cbd, prefix)
-
-	var result T
-
-	switch ptr := any(&result).(type) {
-	case *string:
-		*ptr = payload
-	case *int64:
-		i, err := strconv.ParseInt(payload, 10, 64)
-		if err != nil {
-			return result, err
+// callbackEntryUpdateNoState is used to trigger DB changes without any user input prompting
+func (h *APIBotHandler) callbackEntryUpdateNoState(
+	prefix string,
+	botFn InlineEntryUpdateFn,
+	respFn RespondFuncEditEntry,
+) InlineEntryChange {
+	return func(ctx *th.Context, cb telego.CallbackQuery) error {
+		ev := model.ExtractEventFromCallback(&cb)
+		entryID, exists := h.fsm.GetEntry(ev.UserID)
+		if !exists {
+			h.errBackToMainMenu(ctx, *ev)
+			return nil
 		}
-		*ptr = i
-	default:
-		panic(fmt.Sprintf("unsupported type: %T", result))
-	}
 
-	return result, nil
+		rawDBField, err := peUtils.ExtractSegment(
+			cb.Data,
+			":",
+			2,
+		)
+		if err != nil {
+			h.possibleHackAlert(ctx, *ev, cb.Data)
+			return err
+		}
+
+		var field db.EntryField
+		field, err = field.AssertEntryField(rawDBField)
+		if err != nil {
+			h.possibleHackAlert(ctx, *ev, rawDBField)
+			return err
+		}
+		// TODO it brakes somewhere here
+		valPrefix := prefix + rawDBField + ":"
+		updValue, err := peUtils.GetInfoFromCallbackData[int64](valPrefix, cb.Data)
+		if err != nil {
+			h.possibleHackAlert(ctx, *ev, cb.Data)
+			return err
+		}
+
+		updatedEntry, err := botFn(ctx, ev.UserID, entryID, field, updValue)
+		if err != nil {
+			h.unknownError(ctx, *ev, updValue, err)
+			return err
+		}
+
+		msg := respFn(ev, updatedEntry)
+		_, err = h.teleBot.EditMessageText(ctx, msg)
+		return err
+	}
 }
 
 func (h *APIBotHandler) getCurrStackIDFromFSMorDB(ctx context.Context, ev *model.EventContext) (int64, error) {
@@ -450,6 +540,23 @@ func (h *APIBotHandler) getCurrStackIDFromFSMorDB(ctx context.Context, ev *model
 		}
 	}
 	return stackID, nil
+}
+
+func (h *APIBotHandler) errBackToMainMenu(ctx *th.Context, ev model.EventContext) {
+	msg := h.responder.RespondWithError(&ev, TimeHasExpired)
+	_, _ = h.teleBot.SendMessage(ctx.Context(), msg)
+}
+
+func (h *APIBotHandler) unknownError(ctx *th.Context, ev model.EventContext, reasonValue any, err error) {
+	h.log.permErrorHandle(Error, UnknownError, ev.UserID, reasonValue, err)
+	msg := h.responder.RespondWithError(&ev, SystemError)
+	_, _ = h.teleBot.SendMessage(ctx.Context(), msg)
+}
+
+func (h *APIBotHandler) possibleHackAlert(ctx *th.Context, ev model.EventContext, susPayload string) {
+	h.log.permErrorHandle(Attack, PossibleAttack, ev.UserID, susPayload)
+	msg := h.responder.RespondWithError(&ev, PossibleHackAttempt)
+	_, _ = h.teleBot.SendMessage(ctx.Context(), msg)
 }
 
 func NewAPIBotHandler(l Logger, bot BotService) *APIBotHandler {

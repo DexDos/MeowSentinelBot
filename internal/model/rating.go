@@ -14,8 +14,26 @@ const (
 	MEOW
 )
 
+type RatingFull struct {
+	Rating
+	RaterTgID       int64
+	RaterTgUsername string
+	EntryID         int64
+	ID              int64
+}
+
 type Rating struct {
 	ScoreValue Score
+}
+
+func (r Rating) SetScore(s int64) Rating {
+	if s < 0 {
+		return Rating{ScoreValue: Nasty}
+	}
+	if s > 6 {
+		return Rating{ScoreValue: MEOW}
+	}
+	return Rating{ScoreValue: Score(s)}
 }
 
 func (r Rating) String() string {

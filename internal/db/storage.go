@@ -29,6 +29,9 @@ type Storage interface {
 	GetOwnedStacks(context.Context, model.User) ([]model.StackInfo, error)
 	GetStackByID(context.Context, int64) (*model.StackInfo, error)
 	GetStackRecords(context.Context, int64) ([]model.Entry, error)
+	GetEntryByID(ctx context.Context, entryID int64) (*model.Entry, error)
+	GetEntryRates(ctx context.Context, entryID int64) ([]model.RatingFull, error)
+	RateEntry(ctx context.Context, userID, entryID int64, rate model.Rating) error
 	UpdateRecent(context.Context, model.User) error
 	Transaction(context.Context, func(context.Context) error) error
 	GetExecutor(context.Context) DBTX
@@ -98,8 +101,8 @@ const (
 
 	queryGetStackRecords = `
 		SELECT 
-		    e.id
-		    ,e.stack_id
+			e.id
+			,e.stack_id
 			,e.title
 			,e.type
 			,e.current_season
@@ -108,7 +111,16 @@ const (
 		FROM entries e
 		LEFT JOIN entry_ratings er 
 		ON e.id = er.entry_id
-		WHERE stack_id=?`
+		WHERE stack_id=?
+		ORDER BY e.type `
+	queryGetEntryRatings = `
+		SELECT 
+   			id
+			,user_id
+			,entry_id
+			,rating
+		FROM entry_ratings  
+		WHERE entry_id=?`
 	queryGetStackById = `
 		SELECT 
 		    id
@@ -150,6 +162,22 @@ const (
 			stack_id
 		FROM selected_user_stacks 
 		WHERE user_id=?`
+	queryGetEntryByID = `
+		SELECT
+			e.id
+		    ,e.stack_id
+		    ,e.title
+		    ,e.type
+		    ,e.current_season
+		    ,e.current_episode
+			,COALESCE((
+			    SELECT 
+			        AVG(er.rating)
+			    FROM entry_ratings er
+			    WHERE er.entry_id=e.id
+			), 0) AS avg_rating
+		FROM entries e
+		WHERE e.id=?;`
 	queryAddUser = `
 		INSERT INTO users(telegram_id)
 					VALUES(?)
@@ -168,6 +196,11 @@ const (
 	queryAddStackToUser = `
 		INSERT INTO user_stacks(user_id, stack_id)
 		VALUES (?,?)`
+	queryRateEntry = `
+		INSERT INTO entry_ratings(user_id, entry_id, rating)
+		VALUES (?,?,?)
+		ON CONFLICT(user_id, entry_id)
+		DO UPDATE SET rating = EXCLUDED.rating;`
 	queryUpdateUserCurrentStack = `
 		INSERT INTO selected_user_stacks(user_id, stack_id)
 		VALUES (?,?) 
@@ -202,7 +235,25 @@ const (
 	EntryTypeField           EntryField = "type"
 	EntryCurrentSeasonField  EntryField = "current_season"
 	EntryCurrentEpisodeField EntryField = "current_episode"
+	EntryRatingField         EntryField = "rating"
 )
+
+func (f EntryField) AssertEntryField(field string) (EntryField, error) {
+	switch field {
+	case "title":
+		return EntryTitleField, nil
+	case "type":
+		return EntryTypeField, nil
+	case "season":
+		return EntryCurrentSeasonField, nil
+	case "episode":
+		return EntryCurrentEpisodeField, nil
+	case "rating":
+		return EntryRatingField, nil
+	default:
+		return "", fmt.Errorf("unknown field %s", field)
+	}
+}
 
 type SqliteStorage struct {
 	db *sql.DB
@@ -555,6 +606,80 @@ func (s *SqliteStorage) GetStackRecords(ctx context.Context, stackID int64) ([]m
 	}
 	return entries, nil
 }
+func (s *SqliteStorage) GetEntryByID(ctx context.Context, entryID int64) (*model.Entry, error) {
+	var (
+		e       model.Entry
+		season  sql.NullInt64
+		episode sql.NullInt64
+		rating  model.RawRating
+	)
+	executor := s.GetExecutor(ctx)
+
+	err := executor.QueryRowContext(
+		ctx,
+		queryGetEntryByID,
+		entryID,
+	).Scan(
+		&e.Id,
+		&e.StackId,
+		&e.Title,
+		&e.Type,
+		&season,
+		&episode,
+		&rating,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	e.Status = model.Status{
+		Season:          season.Int64,
+		LastEpisodeSeen: episode.Int64,
+		Rating:          rating.PrepareRating(),
+	}
+	return &e, nil
+}
+func (s *SqliteStorage) GetEntryRates(ctx context.Context, entryID int64) ([]model.RatingFull, error) {
+	executor := s.GetExecutor(ctx)
+	var ratings []model.RatingFull
+
+	rows, err := executor.QueryContext(ctx, queryGetEntryRatings, entryID)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var (
+			rf model.RatingFull
+		)
+		err := rows.Scan(
+			&rf.ID,
+			&rf.RaterTgID,
+			&rf.EntryID,
+			&rf.Rating,
+		)
+		if err != nil {
+			return nil, err
+		}
+		ratings = append(ratings, rf)
+	}
+	return ratings, nil
+}
+func (s *SqliteStorage) RateEntry(ctx context.Context, userID, entryID int64, rate model.Rating) error {
+	executor := s.GetExecutor(ctx)
+	_, err := executor.ExecContext(
+		ctx,
+		queryRateEntry,
+		userID,
+		entryID,
+		int(rate.ScoreValue))
+	return err
+}
+
+// UpdateRecent — function to update JSON recent records
+//
+// Deprecated: pls use APIhandler.fsm to determine the resent stuff
 func (s *SqliteStorage) UpdateRecent(ctx context.Context, user model.User) (err error) {
 	_, err = s.db.ExecContext(ctx, queryUpdateRecent, user.GetPayload(), user.GetTelegramID())
 	return
