@@ -93,6 +93,9 @@ var queryInitSchema = []string{
                         ,FOREIGN KEY (user_id) REFERENCES users (telegram_id) ON DELETE CASCADE
                     	,FOREIGN KEY (stack_id) REFERENCES stacks (id) ON DELETE CASCADE
 	);`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_entry_ratings_user_entry 
+						ON entry_ratings(user_id, entry_id);
+	`,
 }
 
 const (
@@ -172,7 +175,7 @@ const (
 		    ,e.current_episode
 			,COALESCE((
 			    SELECT 
-			        AVG(er.rating)
+			        CAST(ROUND(AVG(er.rating)) AS INTEGER)
 			    FROM entry_ratings er
 			    WHERE er.entry_id=e.id
 			), 0) AS avg_rating

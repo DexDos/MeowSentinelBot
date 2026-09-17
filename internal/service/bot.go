@@ -181,7 +181,12 @@ func (s *BotServiceStd) UpdateEntry(ctx context.Context, entryID int64, field db
 	return nil
 }
 
-func (s *BotServiceStd) DefineAndPerformChange(ctx context.Context, userID, entryID int64, field db.EntryField, rawModValue int64) (*model.Entry, error) {
+func (s *BotServiceStd) DefineAndPerformChange(
+	ctx context.Context,
+	userID, entryID int64,
+	field db.EntryField,
+	rawModValue int64,
+) (*model.Entry, error) {
 	entry, err := s.GetEntryByID(ctx, entryID)
 	if err != nil {
 		return nil, fmt.Errorf("error on getting entry: %w", err)
@@ -208,7 +213,7 @@ func (s *BotServiceStd) InlineRate(ctx context.Context, entry *model.Entry, user
 
 	updatedEntry, err := s.GetEntryByID(ctx, entry.Id)
 	if err != nil {
-		return nil, fmt.Errorf("error on updating entry: %w", err)
+		return nil, fmt.Errorf("error on getting updated entry: %w", err)
 	}
 	return updatedEntry, nil
 }

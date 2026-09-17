@@ -3,6 +3,7 @@ package service
 import (
 	"MeowSentinelBot/internal/db"
 	"MeowSentinelBot/internal/model"
+	"MeowSentinelBot/internal/utils/cbUtils"
 	"MeowSentinelBot/internal/utils/peUtils"
 	"context"
 	"fmt"
@@ -135,13 +136,14 @@ func (h *APIBotHandler) StartBot(r *Responder) {
 		th.CallbackDataEqual("stack:join-stack"),
 	)
 	bh.HandleCallbackQuery(h.stackView(), th.CallbackDataPrefix("stack:view:"))
-	bh.HandleCallbackQuery(h.stackView(), th.CallbackDataEqual("stack:current"))
+	//bh.HandleCallbackQuery(h.stackView(), th.CallbackDataEqual("stack:current"))
 
 	// 			— ENTRIES
 	bh.HandleCallbackQuery(
 		h.callbackWithState(StateWaitForNewEntryTitle, h.responder.RespondToNewEntryCallback),
 		th.CallbackDataPrefix("entry:add:"),
 	)
+	bh.HandleCallbackQuery(h.entryMenu(), th.CallbackDataPrefix("entry:view:"))
 	bh.HandleCallbackQuery(
 		h.callbackWithState(StateWaitForEntryID, h.responder.RespondToEntryUpdateCallback),
 		th.CallbackDataPrefix("entry:update:"),
@@ -157,12 +159,13 @@ func (h *APIBotHandler) StartBot(r *Responder) {
 
 	bh.HandleCallbackQuery(
 		th.CallbackQueryHandler(h.callbackEntryUpdateNoState(
-			"entry:scroll:",
+			"entry:changeValue:",
 			h.bot.DefineAndPerformChange,
 			h.responder.RespondWithSelectedEntryMenuEdited,
 		)),
-		th.CallbackDataPrefix("entry:scroll:"),
+		th.CallbackDataPrefix("entry:changeValue:"),
 	)
+
 	// TECHNICAL
 	bh.HandleCallbackQuery(h.cancellation(), th.CallbackDataEqual("action:deny"))
 
@@ -394,6 +397,34 @@ func (h *APIBotHandler) mainMenu(ctx *th.Context, ev *model.EventContext) error 
 	return err
 }
 
+func (h *APIBotHandler) stackMenu() th.CallbackQueryHandler {
+	return func(ctx *th.Context, query telego.CallbackQuery) error {
+		return nil
+	}
+}
+
+func (h *APIBotHandler) entryMenu() th.CallbackQueryHandler {
+	return func(ctx *th.Context, query telego.CallbackQuery) error {
+		ev := model.ExtractEventFromCallback(&query)
+		entryID, exists := h.fsm.GetEntry(ev.UserID)
+		if !exists {
+			h.errBackToMainMenu(ctx, *ev)
+			return nil
+		}
+
+		entry, err := h.bot.GetEntryByID(ctx, entryID)
+		if err != nil {
+			h.unknownError(ctx, *ev, entryID, err)
+		}
+
+		msg := h.responder.RespondWithSelectedEntryMenu(ev, entry)
+		editMsg := cbUtils.ToEditParams(msg, ev.MessageID)
+		_, err = h.teleBot.EditMessageText(ctx, editMsg)
+
+		return err
+	}
+}
+
 func (h *APIBotHandler) stateNone(ctx *th.Context, update telego.Update) error {
 	return nil
 }
@@ -467,7 +498,7 @@ func (h *APIBotHandler) callbackWithState(state State, respondFn RespondFuncEdit
 			return err
 		}
 
-		editedMsg := respondFn(ev)
+		editedMsg := respondFn(ev, cb.Message.Message())
 		_, err = h.teleBot.EditMessageText(ctx.Context(), editedMsg)
 		return err
 	}
@@ -503,7 +534,7 @@ func (h *APIBotHandler) callbackEntryUpdateNoState(
 			h.possibleHackAlert(ctx, *ev, rawDBField)
 			return err
 		}
-		// TODO it brakes somewhere here
+
 		valPrefix := prefix + rawDBField + ":"
 		updValue, err := peUtils.GetInfoFromCallbackData[int64](valPrefix, cb.Data)
 		if err != nil {

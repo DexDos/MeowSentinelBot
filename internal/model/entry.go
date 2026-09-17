@@ -17,7 +17,7 @@ type Entry struct {
 
 func (e Entry) String() string {
 	return fmt.Sprintf(
-		"[%d]**%s**: %v\n",
+		"%d | <b>%s</b> %v\n",
 		e.Id,
 		e.Title,
 		e.Status,
@@ -32,7 +32,7 @@ type Status struct {
 
 func (s Status) String() string {
 	return fmt.Sprintf(
-		"( %d | %d ) :: %v",
+		"( %d | %d ) %v",
 		s.Season,
 		s.LastEpisodeSeen,
 		s.Rating,

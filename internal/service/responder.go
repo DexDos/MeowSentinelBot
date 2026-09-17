@@ -19,21 +19,21 @@ type Responder interface {
 	RespondWithError(ev *model.EventContext, errTxt ErrorText, v ...ErrorText) *telego.SendMessageParams
 	RespondToCancellationCallback(ev *model.EventContext) *telego.EditMessageTextParams
 	RespondToStart(ev *model.EventContext) *telego.SendMessageParams
-	RespondToNewStackCmdCallback(ev *model.EventContext) *telego.EditMessageTextParams
-	RespondToJoinStackCmdCallback(ev *model.EventContext) *telego.EditMessageTextParams
+	RespondToNewStackCmdCallback(ev *model.EventContext, prevMsg *telego.Message) *telego.EditMessageTextParams
+	RespondToJoinStackCmdCallback(ev *model.EventContext, prevMsg *telego.Message) *telego.EditMessageTextParams
 	RespondWithNewEntryUpdateMenu(ev *model.EventContext, si *model.StackInfo) *telego.EditMessageTextParams
 	RespondWithStackIsEmpty(ev *model.EventContext, si *model.StackInfo) *telego.EditMessageTextParams
 	RespondToFieldUpdate(ev *model.EventContext, prompt ...UserInputPrompt) *telego.SendMessageParams
-	RespondToNewEntryCallback(ev *model.EventContext) *telego.EditMessageTextParams
-	RespondToEntryUpdateCallback(ev *model.EventContext) *telego.EditMessageTextParams
+	RespondToNewEntryCallback(ev *model.EventContext, prevMsg *telego.Message) *telego.EditMessageTextParams
+	RespondToEntryUpdateCallback(ev *model.EventContext, prevMsg *telego.Message) *telego.EditMessageTextParams
 	RespondWithSelectedEntryMenu(ev *model.EventContext, entry *model.Entry) *telego.SendMessageParams
 	RespondWithSelectedEntryMenuEdited(ev *model.EventContext, entry *model.Entry) *telego.EditMessageTextParams
-	RespondWithSelEntryRatingMenu(ev *model.EventContext) *telego.EditMessageTextParams
+	RespondWithSelEntryRatingMenu(ev *model.EventContext, prevMsg *telego.Message) *telego.EditMessageTextParams
 	RespondWithSelectedEntryDeletionMenu(ev *model.EventContext, entry *model.Entry) *telego.SendMessageParams
 }
 
 type RespondFuncSend func(*model.EventContext, ...UserInputPrompt) *telego.SendMessageParams
-type RespondFuncEdit func(ev *model.EventContext) *telego.EditMessageTextParams
+type RespondFuncEdit func(ev *model.EventContext, prevMsg *telego.Message) *telego.EditMessageTextParams
 type RespondFuncEntry func(ev *model.EventContext, entry *model.Entry) *telego.SendMessageParams
 type RespondFuncEditEntry func(ev *model.EventContext, entry *model.Entry) *telego.EditMessageTextParams
 type StdResponder struct {
@@ -50,7 +50,7 @@ func (r StdResponder) RespondWithCurrentStackMenu(ev *model.EventContext, stacks
 	panic("implement me")
 }
 
-func (r StdResponder) RespondToNewStackCmdCallback(ev *model.EventContext) *telego.EditMessageTextParams {
+func (r StdResponder) RespondToNewStackCmdCallback(ev *model.EventContext, _ *telego.Message) *telego.EditMessageTextParams {
 	keyboard := tu.InlineKeyboard(tu.InlineKeyboardRow(
 		tu.InlineKeyboardButton("Cancel").WithCallbackData("action:deny"),
 	))
@@ -61,7 +61,7 @@ func (r StdResponder) RespondToNewStackCmdCallback(ev *model.EventContext) *tele
 	).WithParseMode(telego.ModeMarkdown).WithReplyMarkup(keyboard)
 	return editedMsg
 }
-func (r StdResponder) RespondToJoinStackCmdCallback(ev *model.EventContext) *telego.EditMessageTextParams {
+func (r StdResponder) RespondToJoinStackCmdCallback(ev *model.EventContext, _ *telego.Message) *telego.EditMessageTextParams {
 	keyboard := tu.InlineKeyboard(tu.InlineKeyboardRow(
 		tu.InlineKeyboardButton("Cancel").WithCallbackData("action:deny"),
 	))
@@ -153,10 +153,12 @@ func (r StdResponder) RespondWithCurrentStackView(ev *model.EventContext, stack 
 		stack.Info.Title,
 	))
 	for _, t := range typedEntries {
+		sb.WriteString("<blockquote>")
 		sb.WriteString(fmt.Sprintf(
 			string(typeFmt),
 			t[0].Type,
 		))
+		sb.WriteString("</blockquote>")
 		for _, e := range t {
 			sb.WriteString(fmt.Sprint(e))
 		}
@@ -198,12 +200,12 @@ func (r StdResponder) RespondWithCurrentStackView(ev *model.EventContext, stack 
 		ev.ChatID,
 		ev.MessageID,
 		msgTxt,
-	).WithParseMode(telego.ModeMarkdown).WithReplyMarkup(keyboard)
+	).WithParseMode(telego.ModeHTML).WithReplyMarkup(keyboard)
 
 	return msg
 }
 
-func (r StdResponder) RespondToNewEntryCallback(ev *model.EventContext) *telego.EditMessageTextParams {
+func (r StdResponder) RespondToNewEntryCallback(ev *model.EventContext, _ *telego.Message) *telego.EditMessageTextParams {
 	prompt := string(newEntryInstructionsTitle)
 	keyboard := tu.InlineKeyboard(tu.InlineKeyboardRow(
 		tu.InlineKeyboardButton("Cancel").WithCallbackData("action:deny"),
@@ -213,7 +215,7 @@ func (r StdResponder) RespondToNewEntryCallback(ev *model.EventContext) *telego.
 		WithReplyMarkup(keyboard).WithParseMode(telego.ModeMarkdown)
 	return msg
 }
-func (r StdResponder) RespondToEntryUpdateCallback(ev *model.EventContext) *telego.EditMessageTextParams {
+func (r StdResponder) RespondToEntryUpdateCallback(ev *model.EventContext, _ *telego.Message) *telego.EditMessageTextParams {
 	prompt := string(entryIDInputPrompt)
 	keyboard := tu.InlineKeyboard(tu.InlineKeyboardRow(
 		tu.InlineKeyboardButton("Cancel").WithCallbackData("action:deny"),
@@ -235,7 +237,7 @@ func (r StdResponder) RespondWithSelectedEntryMenu(ev *model.EventContext, entry
 	sb.WriteString(fmt.Sprintf("title:<b>%31v</b>\n", entry.Title))
 	sb.WriteString(fmt.Sprintf("type:<b>%30v</b>\n\n", entry.Type))
 	sb.WriteString(fmt.Sprintf("%v", entry.Status.EnhancedString()))
-	sb.WriteString("</blockquote>")
+	sb.WriteString("</blockquote>") // TODO add number of ratings to UI
 	msgText := sb.String()
 
 	keyboard := tu.InlineKeyboard(
@@ -243,11 +245,11 @@ func (r StdResponder) RespondWithSelectedEntryMenu(ev *model.EventContext, entry
 			tu.InlineKeyboardButton("⭐️ Rate ⭐️").WithCallbackData(fmt.Sprintf("entry:rate:%d", entry.StackId)),
 		),
 		tu.InlineKeyboardRow(
-			tu.InlineKeyboardButton("⏪").WithCallbackData("entry:scroll:season:-1"),
-			tu.InlineKeyboardButton("◀️").WithCallbackData("entry:scroll:episode:-1"),
+			tu.InlineKeyboardButton("⏪").WithCallbackData("entry:changeValue:season:-1"),
+			tu.InlineKeyboardButton("◀️").WithCallbackData("entry:changeValue:episode:-1"),
 			tu.InlineKeyboardButton("set").WithCallbackData("entry:change:status"),
-			tu.InlineKeyboardButton("▶️").WithCallbackData("entry:scroll:episode:1"),
-			tu.InlineKeyboardButton("⏩").WithCallbackData("entry:scroll:season:1"),
+			tu.InlineKeyboardButton("▶️").WithCallbackData("entry:changeValue:episode:1"),
+			tu.InlineKeyboardButton("⏩").WithCallbackData("entry:changeValue:season:1"),
 		),
 		tu.InlineKeyboardRow(
 			tu.InlineKeyboardButton("✍️ title").WithCallbackData("entry:change:title"),
@@ -267,9 +269,34 @@ func (r StdResponder) RespondWithSelectedEntryMenu(ev *model.EventContext, entry
 
 	return msg
 }
-func (r StdResponder) RespondWithSelEntryRatingMenu(ev *model.EventContext) *telego.EditMessageTextParams {
+func (r StdResponder) RespondWithSelEntryRatingMenu(ev *model.EventContext, prevMsg *telego.Message) *telego.EditMessageTextParams {
 
-	panic("implement me")
+	keyboard := tu.InlineKeyboard(tu.InlineKeyboardRow(
+		tu.InlineKeyboardButton("⭐️").WithCallbackData("entry:changeValue:rating:1"),
+		tu.InlineKeyboardButton("⭐️⭐️").WithCallbackData("entry:changeValue:rating:2"),
+		tu.InlineKeyboardButton("⭐️⭐️⭐️").WithCallbackData("entry:changeValue:rating:3"),
+	),
+		tu.InlineKeyboardRow(
+			tu.InlineKeyboardButton("⭐️⭐️⭐️⭐️").WithCallbackData("entry:changeValue:rating:4"),
+			tu.InlineKeyboardButton("⭐️⭐️⭐️⭐️⭐️").WithCallbackData("entry:changeValue:rating:5"),
+		),
+		tu.InlineKeyboardRow(
+			tu.InlineKeyboardButton("🌟✨🌟✨🌟").WithCallbackData("entry:changeValue:rating:6"),
+		),
+		tu.InlineKeyboardRow(
+			tu.InlineKeyboardButton("Cancel").WithCallbackData("entry:view:"),
+		),
+	)
+
+	msg := &telego.EditMessageTextParams{
+		ChatID:      ev.ChatID,
+		MessageID:   ev.MessageID,
+		Entities:    prevMsg.Entities,
+		ReplyMarkup: keyboard,
+		ParseMode:   telego.ModeHTML,
+		Text:        prevMsg.Text,
+	}
+	return msg
 }
 func (r StdResponder) RespondWithSelectedEntryDeletionMenu(ev *model.EventContext, entry *model.Entry) *telego.SendMessageParams {
 	panic("implement me")
@@ -334,8 +361,8 @@ const (
 type ResponseFormat string
 
 const (
-	stackFmt     ResponseFormat = "**%s** ::\n"
-	typeFmt      ResponseFormat = " :: *%s*\n"
+	stackFmt     ResponseFormat = "%s ::\n"
+	typeFmt      ResponseFormat = " :: %s\n"
 	timeShortFmt ResponseFormat = "15:04 01.2.2006"
 )
 

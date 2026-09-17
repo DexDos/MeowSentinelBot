@@ -49,7 +49,7 @@ func (logger *StdLogger) LogEvent(t Severity, event LogErrorText, v ...any) {
 	} else {
 		errText = fmt.Sprintf(
 			string(event),
-			v,
+			v..., // TODO Watch if it works
 		)
 	}
 	log.Printf(
