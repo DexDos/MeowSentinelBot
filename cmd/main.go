@@ -1,23 +1,77 @@
 package main
 
 import (
-	config2 "MeowSentinelBot/internal/config"
+	"MeowSentinelBot/internal/bot/fsm"
+	"MeowSentinelBot/internal/bot/handlers"
+	"MeowSentinelBot/internal/config"
 	"MeowSentinelBot/internal/service"
+	"MeowSentinelBot/internal/storage/sqlite"
+	"MeowSentinelBot/internal/utils"
+	"context"
+	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/mymmrac/telego"
+	th "github.com/mymmrac/telego/telegohandler"
 )
 
 func main() {
+	cfg := config.MustNewConfig("configs/config.json")
+	logger := service.NewStdLogger()
 
-	config := config2.MustNewConfig("configs/config.json")
-	l := service.NewStdLogger()
+	store, err := sqlite.NewStorage(&cfg.Bot.Db)
+	if err != nil {
+		logger.LogEvent(service.Fatal, service.CreatingDBErrorLog, err)
+		os.Exit(1)
+	}
+	defer store.Close()
 
-	var bot service.BotService
-	bot = service.NewBotServiceStd(l, &config.Bot)
+	appService := service.NewService(store)
+	fsmStore := fsm.NewStore(5 * time.Minute)
+	defer fsmStore.Close()
 
-	var handler service.APIHandler
-	handler = service.NewAPIBotHandler(l, bot)
+	token, err := utils.GetEnv(cfg.Bot.Telegram.EnvVar)
+	if err != nil {
+		logger.LogEvent(service.Fatal, service.PanicLog, fmt.Errorf("getting bot token: %w", err))
+		os.Exit(1)
+	}
 
-	var responder service.Responder
-	responder = service.NewStdResponder()
+	bot, err := telego.NewBot(token)
+	if err != nil {
+		logger.LogEvent(service.Fatal, service.PanicLog, fmt.Errorf("initializing bot: %w", err))
+		os.Exit(1)
+	}
 
-	handler.StartBot(&responder)
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	logger.LogEvent(service.LifeCycle, service.BotStart)
+
+	updates, err := bot.UpdatesViaLongPolling(ctx, nil)
+	if err != nil {
+		logger.LogEvent(service.Fatal, service.PanicLog, fmt.Errorf("long polling updates: %w", err))
+		os.Exit(1)
+	}
+
+	bh, err := th.NewBotHandler(bot, updates)
+	if err != nil {
+		logger.LogEvent(service.Fatal, service.PanicLog, fmt.Errorf("creating bot handler: %w", err))
+		os.Exit(1)
+	}
+
+	botHandler := handlers.NewBotHandler(bot, appService, fsmStore, logger)
+	botHandler.RegisterHandlers(bh)
+
+	go func() {
+		if err := bh.Start(); err != nil {
+			logger.LogEvent(service.Fatal, service.PanicLog, fmt.Errorf("starting bot handler: %w", err))
+		}
+	}()
+
+	<-ctx.Done()
+	logger.LogEvent(service.LifeCycle, service.BotStop)
+	_ = bh.Stop()
 }

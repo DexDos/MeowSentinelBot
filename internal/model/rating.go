@@ -1,7 +1,5 @@
 package model
 
-import "fmt"
-
 type Score int
 
 const (
@@ -14,30 +12,33 @@ const (
 	MEOW
 )
 
-type RatingFull struct {
-	Rating
-	RaterTgID       int64
-	RaterTgUsername string
-	EntryID         int64
-	ID              int64
-}
-
 type Rating struct {
 	ScoreValue Score
 }
 
-func (r Rating) SetScore(s int64) Rating {
-	if s < 0 {
-		return Rating{ScoreValue: Nasty}
+func (s Score) Label() string {
+	switch s {
+	case NotSeen:
+		return "Not seen"
+	case Nasty:
+		return "Nasty (1/6)"
+	case Bad:
+		return "Bad (2/6)"
+	case Ick:
+		return "Ick (3/6)"
+	case WorthMeowing:
+		return "Worth Meowing (4/6)"
+	case NiceOne:
+		return "Nice One (5/6)"
+	case MEOW:
+		return "MEOW (6/6)"
+	default:
+		return "Unknown"
 	}
-	if s > 6 {
-		return Rating{ScoreValue: MEOW}
-	}
-	return Rating{ScoreValue: Score(s)}
 }
 
-func (r Rating) String() string {
-	switch r.ScoreValue {
+func (s Score) Stars() string {
+	switch s {
 	case NotSeen:
 		return "—"
 	case Nasty:
@@ -53,36 +54,28 @@ func (r Rating) String() string {
 	case MEOW:
 		return "🌟✨🌟✨🌟"
 	default:
-		return "?"
+		return "—"
 	}
 }
 
-// RawRating is a helper struct to safely extract Rating via PrepareRating() func
-type RawRating struct {
-	ScoreValue Score
+func (s Score) Int() int {
+	return int(s)
 }
 
-func (r *RawRating) Scan(value any) error {
-	if value == nil {
-		r.ScoreValue = NotSeen
-		return nil
+func ScoreFromInt(val int64) Score {
+	if val < 0 {
+		return NotSeen
 	}
-
-	switch v := value.(type) {
-	case int64:
-		r.ScoreValue = Score(v)
-	case []byte:
-		var score int
-		if _, err := fmt.Sscanf(string(v), "%d", &score); err != nil {
-			return fmt.Errorf("failed to scan Rating: %w", err)
-		}
-		r.ScoreValue = Score(score)
-	default:
-		return fmt.Errorf("unsupported type for Rating: %T", value)
+	if val > 6 {
+		return MEOW
 	}
-	return nil
+	return Score(val)
 }
 
-func (r *RawRating) PrepareRating() Rating {
-	return Rating{r.ScoreValue}
+type RatingFull struct {
+	ID              int64
+	EntryID         int64
+	RaterTgID       int64
+	RaterTgUsername string
+	Score           Score
 }

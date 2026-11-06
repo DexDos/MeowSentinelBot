@@ -15,36 +15,32 @@ type EventContext struct {
 }
 
 func ExtractEventFromCallback(cb *telego.CallbackQuery) *EventContext {
-	return &EventContext{
-		ChatID:     tu.ID(cb.Message.GetChat().ID),
+	ev := &EventContext{
 		UserID:     cb.From.ID,
 		User:       &cb.From,
-		MessageID:  cb.Message.GetMessageID(),
 		IsCallback: true,
 		CallbackID: cb.ID,
 	}
+	if cb.Message != nil {
+		ev.ChatID = tu.ID(cb.Message.GetChat().ID)
+		ev.MessageID = cb.Message.GetMessageID()
+	}
+	return ev
 }
 
 func ExtractEvent(update telego.Update) *EventContext {
 	if update.CallbackQuery != nil {
-		cb := update.CallbackQuery
-		return &EventContext{
-			ChatID:     tu.ID(cb.Message.GetChat().ID),
-			UserID:     cb.From.ID,
-			User:       &cb.From,
-			MessageID:  cb.Message.GetMessageID(),
-			IsCallback: true,
-			CallbackID: cb.ID,
-		}
+		return ExtractEventFromCallback(update.CallbackQuery)
 	}
 	if update.Message != nil {
-		return &EventContext{
+		ev := &EventContext{
 			ChatID:     tu.ID(update.Message.Chat.ID),
 			UserID:     update.Message.From.ID,
 			User:       update.Message.From,
 			MessageID:  update.Message.MessageID,
 			IsCallback: false,
 		}
+		return ev
 	}
 	return &EventContext{}
 }

@@ -2,48 +2,31 @@ package model
 
 import (
 	"fmt"
+	"html"
 	"time"
 )
 
 type Entry struct {
-	Id      int64
-	StackId int64
-	Title   string
-	Type    string
-	Status  Status
-	Created time.Time
-	Updated time.Time
+	ID          int64
+	StackID     int64
+	Title       string
+	Type        string
+	Season      int64
+	Episode     int64
+	Rating      Score
+	RatingCount int
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 }
 
-func (e Entry) String() string {
+func (e Entry) FormattedLine() string {
+	escapedTitle := html.EscapeString(e.Title)
 	return fmt.Sprintf(
-		"%d | <b>%s</b> %v\n",
-		e.Id,
-		e.Title,
-		e.Status,
-	)
-}
-
-type Status struct {
-	Season          int64
-	LastEpisodeSeen int64
-	Rating          Rating
-}
-
-func (s Status) String() string {
-	return fmt.Sprintf(
-		"( %d | %d ) %v",
-		s.Season,
-		s.LastEpisodeSeen,
-		s.Rating,
-	)
-}
-
-func (s Status) EnhancedString() string {
-	return fmt.Sprintf(
-		"rating: %6v\n\nHave watched:\nseason:%5d \nepisode:%3d",
-		s.Rating,
-		s.Season,
-		s.LastEpisodeSeen,
+		"<b>#%d</b> %s (S: %d | Ep: %d) %s\n",
+		e.ID,
+		escapedTitle,
+		e.Season,
+		e.Episode,
+		e.Rating.Stars(),
 	)
 }
