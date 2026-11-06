@@ -351,7 +351,7 @@ func (h *APIBotHandler) recordModification(
 func (h *APIBotHandler) recordSelection(
 	fn RespondFuncEntry,
 	nextState State,
-	nextPrompt ...UserInputPrompt,
+	_ ...UserInputPrompt, //next prompt (wtf)
 ) StateStrategy {
 	return func(ctx *th.Context, update telego.Update) error {
 		ev := model.ExtractEvent(update)
