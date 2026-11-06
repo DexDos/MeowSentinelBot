@@ -175,6 +175,23 @@ func ConfirmEntryDeleteKeyboard(entry *model.Entry) *telego.InlineKeyboardMarkup
 	)
 }
 
+// MediaTypeKeyboard provides quick type choices or custom text prompt
+func MediaTypeKeyboard() *telego.InlineKeyboardMarkup {
+	return tu.InlineKeyboard(
+		tu.InlineKeyboardRow(
+			tu.InlineKeyboardButton("🎬 Movie").WithCallbackData("entry:type_choice:Movie"),
+			tu.InlineKeyboardButton("📺 TV Series").WithCallbackData("entry:type_choice:TV Series"),
+		),
+		tu.InlineKeyboardRow(
+			tu.InlineKeyboardButton("🌸 Anime").WithCallbackData("entry:type_choice:Anime"),
+			tu.InlineKeyboardButton("🍿 Cartoon").WithCallbackData("entry:type_choice:Cartoon"),
+		),
+		tu.InlineKeyboardRow(
+			tu.InlineKeyboardButton("Cancel").WithCallbackData("action:cancel"),
+		),
+	)
+}
+
 // CancelKeyboard returns a simple Cancel button
 func CancelKeyboard() *telego.InlineKeyboardMarkup {
 	return tu.InlineKeyboard(

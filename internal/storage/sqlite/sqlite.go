@@ -162,6 +162,7 @@ func (s *Storage) initTables(ctx context.Context) error {
 			FOREIGN KEY (stack_id) REFERENCES stacks(id) ON DELETE CASCADE
 		);`,
 
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_user_stacks_user_stack ON user_stacks(user_id, stack_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_user_stacks_user ON user_stacks(user_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_entries_stack ON entries(stack_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_stack_invites_code ON stack_invites(code);`,
@@ -179,6 +180,8 @@ func (s *Storage) initTables(ctx context.Context) error {
 		`ALTER TABLE users ADD COLUMN username TEXT NOT NULL DEFAULT '';`,
 		`ALTER TABLE users ADD COLUMN first_name TEXT NOT NULL DEFAULT '';`,
 		`ALTER TABLE user_stacks ADD COLUMN role TEXT NOT NULL DEFAULT 'member';`,
+		`DELETE FROM user_stacks WHERE id NOT IN (SELECT MIN(id) FROM user_stacks GROUP BY user_id, stack_id);`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_user_stacks_user_stack ON user_stacks(user_id, stack_id);`,
 	}
 	for _, m := range migrations {
 		// Ignore errors if columns already exist
@@ -246,9 +249,8 @@ func (s *Storage) CreateStack(ctx context.Context, ownerID int64, title string) 
 
 		// 2. Link in user_stacks with role 'owner'
 		_, err = exec.ExecContext(txCtx, `
-			INSERT INTO user_stacks (user_id, stack_id, role)
-			VALUES (?, ?, ?)
-			ON CONFLICT(user_id, stack_id) DO UPDATE SET role = EXCLUDED.role;`,
+			INSERT OR REPLACE INTO user_stacks (user_id, stack_id, role)
+			VALUES (?, ?, ?);`,
 			ownerID, stackID, model.RoleOwner)
 		if err != nil {
 			return fmt.Errorf("link owner in user_stacks: %w", err)
@@ -487,9 +489,8 @@ func (s *Storage) ConsumeInvite(ctx context.Context, code string, userID int64) 
 
 		// 3. Add user to user_stacks
 		_, err = exec.ExecContext(txCtx, `
-			INSERT INTO user_stacks (user_id, stack_id, role)
-			VALUES (?, ?, ?)
-			ON CONFLICT(user_id, stack_id) DO NOTHING;`,
+			INSERT OR IGNORE INTO user_stacks (user_id, stack_id, role)
+			VALUES (?, ?, ?);`,
 			userID, inv.StackID, model.RoleMember)
 		if err != nil {
 			return fmt.Errorf("join stack: %w", err)
