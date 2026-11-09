@@ -47,6 +47,12 @@ func RenderStackView(stack *model.StackInfo, entries []model.Entry) string {
 		return sb.String()
 	}
 
+	// Map each entry to its 1-based sequential index in the stack's slice of records
+	entryIndices := make(map[int64]int, len(entries))
+	for i, e := range entries {
+		entryIndices[e.ID] = i + 1
+	}
+
 	// Group by media type
 	grouped := make(map[string][]model.Entry)
 	var typeOrder []string
@@ -64,7 +70,7 @@ func RenderStackView(stack *model.StackInfo, entries []model.Entry) string {
 	for _, t := range typeOrder {
 		sb.WriteString(fmt.Sprintf("<blockquote><b>:: %s</b></blockquote>\n", html.EscapeString(t)))
 		for _, e := range grouped[t] {
-			sb.WriteString(e.FormattedLine())
+			sb.WriteString(e.FormattedLine(entryIndices[e.ID]))
 		}
 		sb.WriteString("\n")
 	}
@@ -109,12 +115,16 @@ func RenderInviteShare(inv *model.Invite, botUsername string) string {
 	)
 }
 
-func RenderEntryDetail(entry *model.Entry, userScore model.Score) string {
+func RenderEntryDetail(entry *model.Entry, userScore model.Score, localIndex int) string {
 	escapedTitle := html.EscapeString(entry.Title)
 	escapedType := html.EscapeString(entry.Type)
 
 	sb := strings.Builder{}
-	sb.WriteString(fmt.Sprintf("🎬 <b>#%d %s</b>\n", entry.ID, escapedTitle))
+	if localIndex > 0 {
+		sb.WriteString(fmt.Sprintf("🎬 <b>#%d %s</b>\n", localIndex, escapedTitle))
+	} else {
+		sb.WriteString(fmt.Sprintf("🎬 <b>%s</b>\n", escapedTitle))
+	}
 	sb.WriteString(fmt.Sprintf("🏷 <i>Type:</i> %s\n", escapedType))
 	sb.WriteString(fmt.Sprintf("⭐️ <i>Average Rating:</i> %s (%s)\n", entry.Rating.Stars(), entry.Rating.Label()))
 

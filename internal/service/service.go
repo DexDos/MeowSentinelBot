@@ -19,6 +19,7 @@ var (
 	ErrInvalidCode    = errors.New("invalid or expired invite code")
 	ErrAlreadyMember  = errors.New("you are already a member of this stack")
 	ErrEmptyTitle     = errors.New("title cannot be empty")
+	ErrTitleTooLong   = errors.New("title is too long (maximum 128 characters)")
 )
 
 type AppService interface {
@@ -88,6 +89,9 @@ func (s *Service) CreateStack(ctx context.Context, ownerID int64, title string) 
 	if title == "" {
 		return nil, ErrEmptyTitle
 	}
+	if len([]rune(title)) > 128 {
+		return nil, ErrTitleTooLong
+	}
 
 	stackID, err := s.storage.CreateStack(ctx, ownerID, title)
 	if err != nil {
@@ -125,6 +129,9 @@ func (s *Service) UpdateStackTitle(ctx context.Context, userID, stackID int64, t
 	title = strings.TrimSpace(title)
 	if title == "" {
 		return ErrEmptyTitle
+	}
+	if len([]rune(title)) > 128 {
+		return ErrTitleTooLong
 	}
 
 	isMember, role, err := s.storage.IsStackMember(ctx, userID, stackID)
@@ -272,10 +279,17 @@ func (s *Service) AddEntry(ctx context.Context, userID, stackID int64, title, me
 	if title == "" {
 		return nil, ErrEmptyTitle
 	}
+	if len([]rune(title)) > 128 {
+		return nil, ErrTitleTooLong
+	}
+
 	mediaType = strings.TrimSpace(mediaType)
 	if mediaType == "" {
 		mediaType = "Movie"
+	} else if len([]rune(mediaType)) > 64 {
+		mediaType = string([]rune(mediaType)[:64])
 	}
+
 	if season <= 0 {
 		season = 1
 	}
@@ -336,6 +350,9 @@ func (s *Service) UpdateEntryTitle(ctx context.Context, userID, entryID int64, t
 	if title == "" {
 		return nil, ErrEmptyTitle
 	}
+	if len([]rune(title)) > 128 {
+		return nil, ErrTitleTooLong
+	}
 
 	entry, err := s.GetEntry(ctx, userID, entryID)
 	if err != nil {
@@ -353,6 +370,8 @@ func (s *Service) UpdateEntryType(ctx context.Context, userID, entryID int64, me
 	mediaType = strings.TrimSpace(mediaType)
 	if mediaType == "" {
 		mediaType = "Movie"
+	} else if len([]rune(mediaType)) > 64 {
+		mediaType = string([]rune(mediaType)[:64])
 	}
 
 	entry, err := s.GetEntry(ctx, userID, entryID)

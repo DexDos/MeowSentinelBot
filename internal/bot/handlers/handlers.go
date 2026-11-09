@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"html"
 	"regexp"
 	"strconv"
 	"strings"
@@ -18,6 +19,41 @@ import (
 	th "github.com/mymmrac/telego/telegohandler"
 	tu "github.com/mymmrac/telego/telegoutil"
 )
+
+var (
+	ErrInvalidIndex     = errors.New("invalid record number: must be a positive integer")
+	ErrIndexOutOfBounds = errors.New("record number is out of bounds")
+	ErrStackEmpty       = errors.New("stack is empty")
+)
+
+// ParseLocalIndex parses user input into a 1-based local index.
+// It handles inputs such as "1", " 2 ", "#3", "# 4".
+func ParseLocalIndex(input string) (int, error) {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return 0, ErrInvalidIndex
+	}
+	trimmed = strings.TrimPrefix(trimmed, "#")
+	trimmed = strings.TrimSpace(trimmed)
+
+	idx, err := strconv.Atoi(trimmed)
+	if err != nil || idx <= 0 {
+		return 0, ErrInvalidIndex
+	}
+	return idx, nil
+}
+
+// ResolveEntryByLocalIndex safely maps a 1-based local index back to the actual model.Entry
+// from a stack's slice of entries, with strict Out-of-Bounds validation.
+func ResolveEntryByLocalIndex(entries []model.Entry, localIndex int) (*model.Entry, error) {
+	if len(entries) == 0 {
+		return nil, ErrStackEmpty
+	}
+	if localIndex < 1 || localIndex > len(entries) {
+		return nil, fmt.Errorf("%w: index %d not in range 1..%d", ErrIndexOutOfBounds, localIndex, len(entries))
+	}
+	return &entries[localIndex-1], nil
+}
 
 type BotHandler struct {
 	bot         *telego.Bot
@@ -113,15 +149,19 @@ func (h *BotHandler) handleStartCmd(ctx *th.Context, update telego.Update) error
 	if payload != "" {
 		stack, err := h.service.RedeemInvite(ctx.Context(), userID, payload)
 		if err == nil {
+			_ = h.service.SelectStack(ctx.Context(), userID, stack.ID)
 			entries, _ := h.service.GetStackEntries(ctx.Context(), userID, stack.ID)
-			text := fmt.Sprintf("🎉 <b>Welcome! You joined \"%s\"!</b>\n\n%s", stack.Title, presenters.RenderStackView(stack, entries))
+			escapedTitle := html.EscapeString(stack.Title)
+			text := fmt.Sprintf("🎉 <b>Welcome! You joined \"%s\"!</b>\n\n%s", escapedTitle, presenters.RenderStackView(stack, entries))
 			_, sendErr := h.bot.SendMessage(ctx, tu.Message(msg.Chat.ChatID(), text).
 				WithParseMode(telego.ModeHTML).
 				WithReplyMarkup(keyboards.StackViewKeyboard(stack.ID, entries)))
 			return sendErr
 		} else if errors.Is(err, service.ErrAlreadyMember) {
+			_ = h.service.SelectStack(ctx.Context(), userID, stack.ID)
 			entries, _ := h.service.GetStackEntries(ctx.Context(), userID, stack.ID)
-			text := fmt.Sprintf("ℹ️ <b>You are already a member of \"%s\"!</b>\n\n%s", stack.Title, presenters.RenderStackView(stack, entries))
+			escapedTitle := html.EscapeString(stack.Title)
+			text := fmt.Sprintf("ℹ️ <b>You are already a member of \"%s\"!</b>\n\n%s", escapedTitle, presenters.RenderStackView(stack, entries))
 			_, sendErr := h.bot.SendMessage(ctx, tu.Message(msg.Chat.ChatID(), text).
 				WithParseMode(telego.ModeHTML).
 				WithReplyMarkup(keyboards.StackViewKeyboard(stack.ID, entries)))
@@ -359,7 +399,8 @@ func (h *BotHandler) handleTypeChoiceCallback(ctx *th.Context, query telego.Call
 	}
 
 	userScore, _ := h.service.GetUserRating(ctx.Context(), query.From.ID, entry.ID)
-	text := presenters.RenderEntryDetail(entry, userScore)
+	localIdx := h.findEntryLocalIndex(ctx.Context(), query.From.ID, entry.StackID, entry.ID)
+	text := presenters.RenderEntryDetail(entry, userScore, localIdx)
 	kb := keyboards.EntryDetailKeyboard(entry)
 	return h.editOrSend(ctx, query.Message.GetChat().ChatID(), query.Message.GetMessageID(), text, kb)
 }
@@ -379,7 +420,8 @@ func (h *BotHandler) handleViewEntryCallback(ctx *th.Context, query telego.Callb
 	}
 
 	userScore, _ := h.service.GetUserRating(ctx.Context(), query.From.ID, entryID)
-	text := presenters.RenderEntryDetail(entry, userScore)
+	localIdx := h.findEntryLocalIndex(ctx.Context(), query.From.ID, entry.StackID, entry.ID)
+	text := presenters.RenderEntryDetail(entry, userScore, localIdx)
 	kb := keyboards.EntryDetailKeyboard(entry)
 	return h.editOrSend(ctx, query.Message.GetChat().ChatID(), query.Message.GetMessageID(), text, kb)
 }
@@ -421,7 +463,8 @@ func (h *BotHandler) handleStepEntryCallback(ctx *th.Context, query telego.Callb
 	}
 
 	userScore, _ := h.service.GetUserRating(ctx.Context(), query.From.ID, entryID)
-	text := presenters.RenderEntryDetail(updated, userScore)
+	localIdx := h.findEntryLocalIndex(ctx.Context(), query.From.ID, updated.StackID, updated.ID)
+	text := presenters.RenderEntryDetail(updated, userScore, localIdx)
 	kb := keyboards.EntryDetailKeyboard(updated)
 	return h.editOrSend(ctx, query.Message.GetChat().ChatID(), query.Message.GetMessageID(), text, kb)
 }
@@ -439,7 +482,8 @@ func (h *BotHandler) handleRateMenuEntryCallback(ctx *th.Context, query telego.C
 	}
 
 	userScore, _ := h.service.GetUserRating(ctx.Context(), query.From.ID, entryID)
-	text := fmt.Sprintf("%s\n\n⭐️ <b>Choose your rating below:</b>", presenters.RenderEntryDetail(entry, userScore))
+	localIdx := h.findEntryLocalIndex(ctx.Context(), query.From.ID, entry.StackID, entry.ID)
+	text := fmt.Sprintf("%s\n\n⭐️ <b>Choose your rating below:</b>", presenters.RenderEntryDetail(entry, userScore, localIdx))
 	kb := keyboards.RatingPickerKeyboard(entryID)
 	return h.editOrSend(ctx, query.Message.GetChat().ChatID(), query.Message.GetMessageID(), text, kb)
 }
@@ -464,7 +508,8 @@ func (h *BotHandler) handleRateEntryCallback(ctx *th.Context, query telego.Callb
 		return h.sendError(ctx, query.Message.GetChat().ChatID(), query.Message.GetMessageID(), h.sanitizeError(err, "Failed to submit rating."))
 	}
 
-	text := presenters.RenderEntryDetail(updated, score)
+	localIdx := h.findEntryLocalIndex(ctx.Context(), query.From.ID, updated.StackID, updated.ID)
+	text := presenters.RenderEntryDetail(updated, score, localIdx)
 	kb := keyboards.EntryDetailKeyboard(updated)
 	return h.editOrSend(ctx, query.Message.GetChat().ChatID(), query.Message.GetMessageID(), text, kb)
 }
@@ -517,7 +562,8 @@ func (h *BotHandler) handleDeleteConfirmEntryCallback(ctx *th.Context, query tel
 		return h.sendError(ctx, query.Message.GetChat().ChatID(), query.Message.GetMessageID(), "Entry not found.")
 	}
 
-	text := fmt.Sprintf("🗑 <b>Delete \"%s\"?</b>\n\nAre you sure you want to remove this entry?", entry.Title)
+	escapedTitle := html.EscapeString(entry.Title)
+	text := fmt.Sprintf("🗑 <b>Delete \"%s\"?</b>\n\nAre you sure you want to remove this entry?", escapedTitle)
 	kb := keyboards.ConfirmEntryDeleteKeyboard(entry)
 	return h.editOrSend(ctx, query.Message.GetChat().ChatID(), query.Message.GetMessageID(), text, kb)
 }
@@ -540,7 +586,7 @@ func (h *BotHandler) handleDeleteEntryCallback(ctx *th.Context, query telego.Cal
 		return h.sendError(ctx, query.Message.GetChat().ChatID(), query.Message.GetMessageID(), h.sanitizeError(err, "Failed to delete entry."))
 	}
 
-	// Return to stack view
+	// Return to stack view with cleanly re-indexed entries
 	stack, _ := h.service.GetStack(ctx.Context(), query.From.ID, stackID)
 	entries, _ := h.service.GetStackEntries(ctx.Context(), query.From.ID, stackID)
 	text := presenters.RenderStackView(stack, entries)
@@ -565,18 +611,39 @@ func (h *BotHandler) handleTextMessage(ctx *th.Context, update telego.Update) er
 	}
 
 	userID := msg.From.ID
-	state, data, ok := h.fsm.Get(userID)
-	if !ok || state == fsm.StateNone {
-		// No active conversational state; prompt to use /menu
-		text := "🐱 Send /menu to view your stacks or /start to begin!"
-		_, err := h.bot.SendMessage(ctx, tu.Message(msg.Chat.ChatID(), text))
-		return err
-	}
-
 	userInput := strings.TrimSpace(msg.Text)
 	chatID := msg.Chat.ChatID()
 
+	state, data, ok := h.fsm.Get(userID)
+	if !ok || state == fsm.StateNone {
+		// If user typed a record index (e.g., "1" or "#2"), check if they have a currently selected stack
+		if localIdx, err := ParseLocalIndex(userInput); err == nil {
+			stackID, err := h.service.GetSelectedStackID(ctx.Context(), userID)
+			if err == nil && stackID > 0 {
+				return h.handleSelectEntryByLocalIndex(ctx, chatID, userID, stackID, localIdx)
+			}
+		}
+
+		// No active conversational state; prompt to use /menu
+		text := "🐱 Send /menu to view your stacks or /start to begin!"
+		_, err := h.bot.SendMessage(ctx, tu.Message(chatID, text))
+		return err
+	}
+
 	switch state {
+	case fsm.StateWaitForSelectEntry:
+		h.fsm.Clear(userID)
+		stackID, _ := data["stackID"].(int64)
+		localIdx, err := ParseLocalIndex(userInput)
+		if err != nil {
+			userMsg := "Please enter a valid positive number."
+			_, err = h.bot.SendMessage(ctx, tu.Message(chatID, presenters.RenderError(userMsg)).
+				WithParseMode(telego.ModeHTML).
+				WithReplyMarkup(keyboards.BackToMenuKeyboard()))
+			return err
+		}
+		return h.handleSelectEntryByLocalIndex(ctx, chatID, userID, stackID, localIdx)
+
 	case fsm.StateWaitForStackTitle:
 		h.fsm.Clear(userID)
 		stack, err := h.service.CreateStack(ctx.Context(), userID, userInput)
@@ -589,6 +656,7 @@ func (h *BotHandler) handleTextMessage(ctx *th.Context, update telego.Update) er
 			return err
 		}
 
+		_ = h.service.SelectStack(ctx.Context(), userID, stack.ID)
 		entries, _ := h.service.GetStackEntries(ctx.Context(), userID, stack.ID)
 		text := fmt.Sprintf("✨ <b>Stack created!</b>\n\n%s", presenters.RenderStackView(stack, entries))
 		_, err = h.bot.SendMessage(ctx, tu.Message(chatID, text).
@@ -620,8 +688,10 @@ func (h *BotHandler) handleTextMessage(ctx *th.Context, update telego.Update) er
 		stack, err := h.service.RedeemInvite(ctx.Context(), userID, userInput)
 		if err != nil {
 			if errors.Is(err, service.ErrAlreadyMember) {
+				_ = h.service.SelectStack(ctx.Context(), userID, stack.ID)
 				entries, _ := h.service.GetStackEntries(ctx.Context(), userID, stack.ID)
-				text := fmt.Sprintf("ℹ️ <b>You are already in \"%s\"!</b>\n\n%s", stack.Title, presenters.RenderStackView(stack, entries))
+				escapedStackTitle := html.EscapeString(stack.Title)
+				text := fmt.Sprintf("ℹ️ <b>You are already in \"%s\"!</b>\n\n%s", escapedStackTitle, presenters.RenderStackView(stack, entries))
 				_, err = h.bot.SendMessage(ctx, tu.Message(chatID, text).
 					WithParseMode(telego.ModeHTML).
 					WithReplyMarkup(keyboards.StackViewKeyboard(stack.ID, entries)))
@@ -635,8 +705,10 @@ func (h *BotHandler) handleTextMessage(ctx *th.Context, update telego.Update) er
 			return err
 		}
 
+		_ = h.service.SelectStack(ctx.Context(), userID, stack.ID)
 		entries, _ := h.service.GetStackEntries(ctx.Context(), userID, stack.ID)
-		text := fmt.Sprintf("🎉 <b>Success! You joined \"%s\"!</b>\n\n%s", stack.Title, presenters.RenderStackView(stack, entries))
+		escapedStackTitle := html.EscapeString(stack.Title)
+		text := fmt.Sprintf("🎉 <b>Success! You joined \"%s\"!</b>\n\n%s", escapedStackTitle, presenters.RenderStackView(stack, entries))
 		_, err = h.bot.SendMessage(ctx, tu.Message(chatID, text).
 			WithParseMode(telego.ModeHTML).
 			WithReplyMarkup(keyboards.StackViewKeyboard(stack.ID, entries)))
@@ -650,7 +722,8 @@ func (h *BotHandler) handleTextMessage(ctx *th.Context, update telego.Update) er
 			"title":   userInput,
 		}, 5*time.Minute)
 
-		text := fmt.Sprintf("Title recorded: <b>%s</b>\n\nNow select or type the <b>Media Type</b>:", userInput)
+		escapedInput := html.EscapeString(userInput)
+		text := fmt.Sprintf("Title recorded: <b>%s</b>\n\nNow select or type the <b>Media Type</b>:", escapedInput)
 		_, err := h.bot.SendMessage(ctx, tu.Message(chatID, text).
 			WithParseMode(telego.ModeHTML).
 			WithReplyMarkup(keyboards.MediaTypeKeyboard()))
@@ -672,7 +745,8 @@ func (h *BotHandler) handleTextMessage(ctx *th.Context, update telego.Update) er
 		}
 
 		userScore, _ := h.service.GetUserRating(ctx.Context(), userID, entry.ID)
-		text := fmt.Sprintf("✨ <b>Added to stack!</b>\n\n%s", presenters.RenderEntryDetail(entry, userScore))
+		localIdx := h.findEntryLocalIndex(ctx.Context(), userID, entry.StackID, entry.ID)
+		text := fmt.Sprintf("✨ <b>Added to stack!</b>\n\n%s", presenters.RenderEntryDetail(entry, userScore, localIdx))
 		_, err = h.bot.SendMessage(ctx, tu.Message(chatID, text).
 			WithParseMode(telego.ModeHTML).
 			WithReplyMarkup(keyboards.EntryDetailKeyboard(entry)))
@@ -693,7 +767,8 @@ func (h *BotHandler) handleTextMessage(ctx *th.Context, update telego.Update) er
 		}
 
 		userScore, _ := h.service.GetUserRating(ctx.Context(), userID, entryID)
-		text := fmt.Sprintf("✅ <b>Title updated!</b>\n\n%s", presenters.RenderEntryDetail(updated, userScore))
+		localIdx := h.findEntryLocalIndex(ctx.Context(), userID, updated.StackID, updated.ID)
+		text := fmt.Sprintf("✅ <b>Title updated!</b>\n\n%s", presenters.RenderEntryDetail(updated, userScore, localIdx))
 		_, err = h.bot.SendMessage(ctx, tu.Message(chatID, text).
 			WithParseMode(telego.ModeHTML).
 			WithReplyMarkup(keyboards.EntryDetailKeyboard(updated)))
@@ -714,7 +789,8 @@ func (h *BotHandler) handleTextMessage(ctx *th.Context, update telego.Update) er
 		}
 
 		userScore, _ := h.service.GetUserRating(ctx.Context(), userID, entryID)
-		text := fmt.Sprintf("✅ <b>Type updated!</b>\n\n%s", presenters.RenderEntryDetail(updated, userScore))
+		localIdx := h.findEntryLocalIndex(ctx.Context(), userID, updated.StackID, updated.ID)
+		text := fmt.Sprintf("✅ <b>Type updated!</b>\n\n%s", presenters.RenderEntryDetail(updated, userScore, localIdx))
 		_, err = h.bot.SendMessage(ctx, tu.Message(chatID, text).
 			WithParseMode(telego.ModeHTML).
 			WithReplyMarkup(keyboards.EntryDetailKeyboard(updated)))
@@ -736,7 +812,8 @@ func (h *BotHandler) handleTextMessage(ctx *th.Context, update telego.Update) er
 		}
 
 		userScore, _ := h.service.GetUserRating(ctx.Context(), userID, entryID)
-		text := fmt.Sprintf("✅ <b>Progress updated!</b>\n\n%s", presenters.RenderEntryDetail(updated, userScore))
+		localIdx := h.findEntryLocalIndex(ctx.Context(), userID, updated.StackID, updated.ID)
+		text := fmt.Sprintf("✅ <b>Progress updated!</b>\n\n%s", presenters.RenderEntryDetail(updated, userScore, localIdx))
 		_, err = h.bot.SendMessage(ctx, tu.Message(chatID, text).
 			WithParseMode(telego.ModeHTML).
 			WithReplyMarkup(keyboards.EntryDetailKeyboard(updated)))
@@ -749,6 +826,45 @@ func (h *BotHandler) handleTextMessage(ctx *th.Context, update telego.Update) er
 // =============================================================================
 // Internal Helpers
 // =============================================================================
+
+func (h *BotHandler) findEntryLocalIndex(ctx context.Context, userID, stackID, entryID int64) int {
+	entries, err := h.service.GetStackEntries(ctx, userID, stackID)
+	if err != nil {
+		return 0
+	}
+	for i, e := range entries {
+		if e.ID == entryID {
+			return i + 1
+		}
+	}
+	return 0
+}
+
+func (h *BotHandler) handleSelectEntryByLocalIndex(ctx *th.Context, chatID telego.ChatID, userID int64, stackID int64, localIndex int) error {
+	entries, err := h.service.GetStackEntries(ctx.Context(), userID, stackID)
+	if err != nil {
+		h.logger.LogEvent(service.Error, service.UnknownError, userID, "select_by_index_get_entries", err)
+		return h.sendError(ctx, chatID, 0, h.sanitizeError(err, "Failed to load stack entries."))
+	}
+
+	selectedEntry, err := ResolveEntryByLocalIndex(entries, localIndex)
+	if err != nil {
+		if errors.Is(err, ErrStackEmpty) {
+			return h.sendError(ctx, chatID, 0, "This stack is currently empty! Click ✨ Add Media to add an entry.")
+		}
+		errMsg := fmt.Sprintf("Invalid entry number #%d. Please choose a number between 1 and %d.", localIndex, len(entries))
+		return h.sendError(ctx, chatID, 0, errMsg)
+	}
+
+	userScore, _ := h.service.GetUserRating(ctx.Context(), userID, selectedEntry.ID)
+	text := presenters.RenderEntryDetail(selectedEntry, userScore, localIndex)
+	kb := keyboards.EntryDetailKeyboard(selectedEntry)
+
+	_, sendErr := h.bot.SendMessage(ctx, tu.Message(chatID, text).
+		WithParseMode(telego.ModeHTML).
+		WithReplyMarkup(kb))
+	return sendErr
+}
 
 func (h *BotHandler) sendMainMenu(ctx *th.Context, chatID telego.ChatID) error {
 	userID := chatID.ID
@@ -774,21 +890,22 @@ func (h *BotHandler) answerCallback(ctx *th.Context, callbackID string, text ...
 }
 
 func (h *BotHandler) editOrSend(ctx *th.Context, chatID telego.ChatID, messageID int, text string, kb *telego.InlineKeyboardMarkup) error {
-	editParams := &telego.EditMessageTextParams{
-		ChatID:      chatID,
-		MessageID:   messageID,
-		Text:        text,
-		ParseMode:   telego.ModeHTML,
-		ReplyMarkup: kb,
+	if messageID != 0 {
+		editParams := &telego.EditMessageTextParams{
+			ChatID:      chatID,
+			MessageID:   messageID,
+			Text:        text,
+			ParseMode:   telego.ModeHTML,
+			ReplyMarkup: kb,
+		}
+		if _, err := h.bot.EditMessageText(ctx, editParams); err == nil {
+			return nil
+		}
 	}
 
-	_, err := h.bot.EditMessageText(ctx, editParams)
-	if err != nil {
-		// If edit fails (e.g., message unchanged or inaccessible), send a new message
-		_, err = h.bot.SendMessage(ctx, tu.Message(chatID, text).
-			WithParseMode(telego.ModeHTML).
-			WithReplyMarkup(kb))
-	}
+	_, err := h.bot.SendMessage(ctx, tu.Message(chatID, text).
+		WithParseMode(telego.ModeHTML).
+		WithReplyMarkup(kb))
 	return err
 }
 
@@ -850,6 +967,8 @@ func (h *BotHandler) sanitizeError(err error, fallback string) string {
 	switch {
 	case errors.Is(err, service.ErrEmptyTitle):
 		return "Title cannot be empty."
+	case errors.Is(err, service.ErrTitleTooLong):
+		return "Title is too long (maximum 128 characters)."
 	case errors.Is(err, service.ErrNotOwner):
 		return "Only the stack owner can perform this action."
 	case errors.Is(err, service.ErrNotMember):

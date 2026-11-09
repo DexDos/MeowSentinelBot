@@ -1,0 +1,12 @@
+.git
+.gitignore
+.idea
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+.env
+tmp*
+*.exe
+*.test

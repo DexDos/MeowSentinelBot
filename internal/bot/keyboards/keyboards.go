@@ -31,7 +31,7 @@ func MainMenuKeyboard(stacks []model.StackInfo) *telego.InlineKeyboardMarkup {
 	return tu.InlineKeyboard(rows...)
 }
 
-// StackViewKeyboard builds keyboard for inside a stack
+// StackViewKeyboard builds keyboard for inside a stack with 1-based local indexing on buttons
 func StackViewKeyboard(stackID int64, entries []model.Entry) *telego.InlineKeyboardMarkup {
 	var rows [][]telego.InlineKeyboardButton
 
@@ -41,11 +41,11 @@ func StackViewKeyboard(stackID int64, entries []model.Entry) *telego.InlineKeybo
 		tu.InlineKeyboardButton("⚙️ Settings").WithCallbackData(fmt.Sprintf("stack:settings:%d", stackID)),
 	))
 
-	// Direct pickers for entries (up to 4 per row)
+	// Direct pickers for entries (up to 4 per row) with local 1-based sequential numbering
 	if len(entries) > 0 {
 		var entryBtns []telego.InlineKeyboardButton
-		for _, e := range entries {
-			entryBtns = append(entryBtns, tu.InlineKeyboardButton(fmt.Sprintf("#%d", e.ID)).
+		for i, e := range entries {
+			entryBtns = append(entryBtns, tu.InlineKeyboardButton(fmt.Sprintf("#%d", i+1)).
 				WithCallbackData(fmt.Sprintf("entry:view:%d", e.ID)))
 			if len(entryBtns) == 4 {
 				rows = append(rows, tu.InlineKeyboardRow(entryBtns...))

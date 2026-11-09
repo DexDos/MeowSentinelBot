@@ -19,11 +19,11 @@ type Entry struct {
 	UpdatedAt   time.Time
 }
 
-func (e Entry) FormattedLine() string {
+func (e Entry) FormattedLine(index int) string {
 	escapedTitle := html.EscapeString(e.Title)
 	return fmt.Sprintf(
 		"<b>#%d</b> %s (S: %d | Ep: %d) %s\n",
-		e.ID,
+		index,
 		escapedTitle,
 		e.Season,
 		e.Episode,

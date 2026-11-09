@@ -17,6 +17,7 @@ const (
 	StateWaitForEditTitle
 	StateWaitForEditType
 	StateWaitForEditProgress
+	StateWaitForSelectEntry
 )
 
 func (s State) String() string {
@@ -39,6 +40,8 @@ func (s State) String() string {
 		return "StateWaitForEditType"
 	case StateWaitForEditProgress:
 		return "StateWaitForEditProgress"
+	case StateWaitForSelectEntry:
+		return "StateWaitForSelectEntry"
 	default:
 		return "StateUnknown"
 	}
