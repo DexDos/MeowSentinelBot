@@ -8,6 +8,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -28,6 +30,14 @@ type Storage struct {
 var _ storage.Storage = (*Storage)(nil)
 
 func NewStorage(cfg *config.DB) (*Storage, error) {
+	// Ensure parent directory exists for SQLite database file
+	dir := filepath.Dir(cfg.Path)
+	if dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return nil, fmt.Errorf("create db directory %s: %w", dir, err)
+		}
+	}
+
 	dsn := fmt.Sprintf(cfg.DSN, cfg.Path)
 	db, err := sql.Open(cfg.Controller, dsn)
 	if err != nil {

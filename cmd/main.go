@@ -89,20 +89,49 @@ func main() {
 	})
 
 	// Configure Telego webhook updates with secret token enforcement
-	var secretOptions []string
-	if webhookSecret != "" {
-		secretOptions = append(secretOptions, webhookSecret)
-	} else {
-		logger.LogEvent(service.Warning, service.LogErrorText("WEBHOOK_SECRET is not set; incoming updates will not validate secret token header"))
-	}
+	webhookURL := os.Getenv("WEBHOOK_URL")
+	var updates <-chan telego.Update
 
-	updates, err := bot.UpdatesViaWebhook(
-		ctx,
-		telego.WebhookHTTPServeMux(mux, webhookPath, secretOptions...),
-	)
-	if err != nil {
-		logger.LogEvent(service.Fatal, service.PanicLog, fmt.Errorf("registering webhook updates: %w", err))
-		os.Exit(1)
+	if webhookURL != "" {
+		var secretOptions []string
+		if webhookSecret != "" {
+			secretOptions = append(secretOptions, webhookSecret)
+		} else {
+			logger.LogEvent(service.Warning, service.LogErrorText("WEBHOOK_SECRET is not set; incoming updates will not validate secret token header"))
+		}
+
+		// Automatically register webhook URL with Telegram API
+		setParams := &telego.SetWebhookParams{
+			URL:         webhookURL,
+			SecretToken: webhookSecret,
+		}
+		if err := bot.SetWebhook(ctx, setParams); err != nil {
+			logger.LogEvent(service.Fatal, service.PanicLog, fmt.Errorf("registering webhook with Telegram API: %w", err))
+			os.Exit(1)
+		}
+		logger.LogEvent(service.LifeCycle, service.LogErrorText(fmt.Sprintf("Telegram webhook successfully registered to: %s", webhookURL)))
+
+		webhookUpdates, err := bot.UpdatesViaWebhook(
+			ctx,
+			telego.WebhookHTTPServeMux(mux, webhookPath, secretOptions...),
+		)
+		if err != nil {
+			logger.LogEvent(service.Fatal, service.PanicLog, fmt.Errorf("registering webhook updates: %w", err))
+			os.Exit(1)
+		}
+		updates = webhookUpdates
+	} else {
+		logger.LogEvent(service.LifeCycle, service.LogErrorText("WEBHOOK_URL is not set; running in Long Polling mode (HTTP server remains active for /healthz)"))
+
+		// Clean up any stale webhook on Telegram API so getUpdates receives messages
+		_ = bot.DeleteWebhook(ctx, &telego.DeleteWebhookParams{})
+
+		lpUpdates, err := bot.UpdatesViaLongPolling(ctx, nil)
+		if err != nil {
+			logger.LogEvent(service.Fatal, service.PanicLog, fmt.Errorf("starting long polling: %w", err))
+			os.Exit(1)
+		}
+		updates = lpUpdates
 	}
 
 	bh, err := th.NewBotHandler(bot, updates)

@@ -3,7 +3,7 @@
 # ==============================================================================
 # Stage 1: Build binary
 # ==============================================================================
-FROM golang:1.24-alpine AS builder
+FROM golang:alpine AS builder
 
 # Install build tools and certificates
 RUN apk add --no-cache ca-certificates tzdata git
