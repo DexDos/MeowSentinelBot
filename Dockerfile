@@ -21,6 +21,7 @@ COPY . .
 # -trimpath strips absolute paths from the binary for reproducible builds and security
 # -ldflags="-s -w" strips symbol table and debug info to minimize binary size
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -p 1 \
     -trimpath \
     -ldflags="-s -w -extldflags '-static'" \
     -o /bin/bot \
