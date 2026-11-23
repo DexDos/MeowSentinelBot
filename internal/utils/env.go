@@ -1,21 +1,22 @@
 package utils
 
 import (
-	"errors"
 	"fmt"
 	"os"
 
 	"github.com/joho/godotenv"
 )
 
+// GetEnv retrieves the value of the environment variable named by envVar.
+// It optionally loads a .env file if one exists (for local development),
+// but gracefully falls back to system / container environment variables if .env is not found.
 func GetEnv(envVar string) (string, error) {
-	if err := godotenv.Load(".env"); err != nil {
-		return "", fmt.Errorf("error loading .env file: %w", err)
-	}
+	// Silently ignore error if .env file doesn't exist (standard for Docker / cloud deployments)
+	_ = godotenv.Load(".env")
 
 	token := os.Getenv(envVar)
 	if token == "" {
-		return "", errors.New("no telegram bot token provided")
+		return "", fmt.Errorf("environment variable %s is not set", envVar)
 	}
 	return token, nil
 }
